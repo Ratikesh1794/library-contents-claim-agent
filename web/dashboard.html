@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sweep Dashboard</title>
+<link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand"><span aria-hidden="true">📚</span> Contents Claim <span class="muted">· Dashboard</span></div>
+  <label class="pick">Sweep
+    <select id="sweepPick" aria-label="Choose a sweep"></select>
+  </label>
+  <label class="follow"><input type="checkbox" id="follow" checked> Follow new sweeps</label>
+  <div class="spacer"></div>
+  <span id="pillPhone" class="pill" data-s="off"><i></i><span>Phone offline</span></span>
+  <span id="pillVoice" class="pill" data-s="off"><i></i><span>Voice idle</span></span>
+  <span id="pillConn" class="pill" data-s="warn"><i></i><span>Connecting…</span></span>
+</header>
+
+<main>
+  <section class="kpis" aria-label="Headline numbers">
+    <div class="kpi"><b id="kBooks">0</b><span>books</span></div>
+    <div class="kpi ok"><b id="kIdent">0</b><span>identified</span></div>
+    <div class="kpi warn"><b id="kUnread">0</b><span>unidentified</span></div>
+    <div class="kpi"><b id="kItems">0</b><span>other items</span></div>
+    <div class="kpi"><b id="kFrames">0</b><span id="kFramesSub">frames</span></div>
+    <div class="kpi"><b id="kRoom">—</b><span id="kRoomSub">room (not measured)</span></div>
+    <div class="kpi"><b id="kValue">—</b><span id="kValueSub">replacement value</span></div>
+  </section>
+
+  <section id="packet" class="card packet" hidden>
+    <div>
+      <h2>Claim packet ready</h2>
+      <p id="pSummary" class="muted"></p>
+      <div id="pTotals" class="totals"></div>
+    </div>
+    <div class="actions">
+      <a id="pReport" class="btn primary" target="_blank" rel="noopener">Open report</a>
+      <a id="pJson" class="btn" target="_blank" rel="noopener">Packet JSON</a>
+    </div>
+  </section>
+
+  <div class="cols">
+    <section class="card records">
+      <div class="tabs" role="tablist">
+        <button role="tab" data-tab="books" aria-selected="true">Books <span id="cBooks" class="badge">0</span></button>
+        <button role="tab" data-tab="items" aria-selected="false">Other items <span id="cItems" class="badge">0</span></button>
+        <button role="tab" data-tab="review" aria-selected="false">Review queue <span id="cReview" class="badge">0</span></button>
+      </div>
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="Search title, author, category…" aria-label="Search records">
+        <div id="filters" class="seg" role="group" aria-label="Filter books">
+          <button data-f="all" aria-pressed="true">All</button>
+          <button data-f="identified" aria-pressed="false">Identified</button>
+          <button data-f="unidentified" aria-pressed="false">Unidentified</button>
+        </div>
+      </div>
+      <div class="tablewrap">
+        <table id="table"><thead></thead><tbody></tbody></table>
+        <p id="empty" class="empty">Waiting for the phone to start a sweep. Scan the QR code from the terminal.</p>
+      </div>
+    </section>
+
+    <aside class="side">
+      <section class="card">
+        <h2>Live activity</h2>
+        <ol id="feed" class="feed" aria-live="polite"></ol>
+      </section>
+      <section class="card">
+        <h2>Conversation</h2>
+        <div id="convo" class="convo" role="log" aria-live="polite"><p class="empty">Nothing said yet.</p></div>
+      </section>
+    </aside>
+  </div>
+</main>
+<script src="/static/dashboard.js"></script>
+</body></html>

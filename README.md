@@ -15,7 +15,7 @@ Needs Python 3.12 and an OpenAI API key.
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements.txt
 source .venv/bin/activate
-pytest                     # 82 offline tests; every external service is faked
+pytest                     # 84 offline tests; every external service is faked
 cp .env.example .env       # then fill in OPENAI_API_KEY (see "Configuration" below)
 ```
 
@@ -29,6 +29,14 @@ scripts/run.sh             # starts the server + tunnel, prints the link and a Q
 ```
 
 Scan the QR code, allow camera and microphone, keep the screen on, tap **Start sweep**, and talk.
+
+**Two screens:**
+- **Phone:** camera, the voice agent (state, mute / hold-to-talk, last thing each side said), book/item counts,
+  *Measure the room*, *Finish*.
+- **Laptop dashboard** (`run.sh` opens `http://localhost:8000/dashboard?t=<token>` automatically): headline numbers,
+  every book / item / review line in tables with photo thumbnails, search and filters, a live activity feed (each
+  frame analysed or skipped, coach tips, room measurements), the full conversation, and the packet totals + report
+  link when the sweep finishes. It follows a newly started sweep automatically; older sweeps are in the picker.
 Set `NGROK_DOMAIN` in `.env` to your free static ngrok domain and the link and QR code stay the same on every run.
 Same Wi-Fi and media must never leave your network? Use `scripts/mkcert_setup.sh` instead (local HTTPS).
 
@@ -88,14 +96,14 @@ backend/
   stages/            the pipeline, one module per stage, file-in/file-out:
                        quality -> identify (+ catalogue) -> track + dedupe -> measure_scale -> measure_books
                        | measure_room | price -> assemble -> report
-  live/              app.py   FastAPI: phone app, API, /ws/live, /voice signalling, token auth
+  live/              app.py   FastAPI: phone app, laptop dashboard, API, /ws/live (fan-out to every screen), /voice, auth
                      voice_pipecat.py  voice engine "pipecat": RNNoise + volume-gated Silero VAD + OpenAI Realtime
                      agent.py voice engine "direct" (phone -> OpenAI over WebRTC, server sideband) + shared tools
                      coach.py capture-issue state machine
   adapters/          one file per external service: openai_vision, open_library, google_books, ebay,
                      frankfurter, null_reconstructor
   templates/         report.html.j2
-web/                 index.html, app.js, style.css (phone app; tunables in CONFIG at the top of app.js)
+web/                 index.html, app.js, style.css (phone); dashboard.html, dashboard.js, dashboard.css (laptop)
 scripts/             run.sh (server + tunnel + QR), mkcert_setup.sh, print_qr.py
 tests/               one small file per stage; fakes.py holds the fake services
 docs/                system and low-level design

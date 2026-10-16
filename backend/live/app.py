@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
+import cv2
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -40,6 +41,7 @@ from backend.schemas import Frame, Sighting, UserFact
 
 log = logging.getLogger("live")
 WEB = ROOT / "web"
+HISTORY_TYPES = {"transcript", "coach", "status", "frame", "agent_state", "packet_ready", "phone", "room"}
 EXPIRED_PAGE = """<!doctype html><meta name=viewport content="width=device-width,initial-scale=1">
 <body style="font:17px system-ui;background:#0f1115;color:#eee;display:grid;place-items:center;min-height:90vh;text-align:center;padding:24px">
 <div><h2>This link has expired</h2><p style="color:#9aa3b2">The server was restarted or the link is incomplete.<br>
@@ -53,7 +55,10 @@ class SweepSession:
     cfg: Config
     coach: Coach
     t0: float = field(default_factory=time.time)
-    down: asyncio.Queue = field(default_factory=asyncio.Queue)     # agent/app -> browser
+    down: asyncio.Queue = field(default_factory=asyncio.Queue)     # agent/app -> every connected screen (fan-out)
+    subs: set = field(default_factory=set)                          # one queue per open WebSocket (phone, dashboards)
+    history: deque = field(default_factory=lambda: deque(maxlen=800))   # replayed to a dashboard that joins late
+    phones: int = 0                                                 # phones currently connected
     inject: asyncio.Queue = field(default_factory=asyncio.Queue)   # app-state text -> agent
     frame_q: asyncio.Queue = field(default_factory=asyncio.Queue)
     transcript: list = field(default_factory=list)
@@ -151,8 +156,21 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
             s = SweepSession(sweep_id, get_dir(sweep_id), cfg, Coach(cfg))
             s.hooks = Hooks(s, finish)
             s.tasks.append(asyncio.create_task(frame_worker(s)))
+            s.tasks.append(asyncio.create_task(fanout(s)))
             app.state.sessions[sweep_id] = s
         return s
+
+    async def fanout(s: SweepSession):
+        """Copy every live message to every connected screen; keep the meaningful ones for late joiners."""
+        while True:
+            m = await s.down.get()
+            if m.get("type") in HISTORY_TYPES and not (m["type"] == "transcript" and m.get("mode") == "append"):
+                s.history.append(m)
+            for q in list(s.subs):
+                try:
+                    q.put_nowait(m)
+                except asyncio.QueueFull:
+                    log.warning("a screen is not keeping up; dropped a %s message", m.get("type"))
 
     async def frame_worker(s: SweepSession):
         """Identify keyframes as they arrive; update the panel and let the Coach react."""
@@ -167,6 +185,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
                 skipped += 1
             if skipped:
                 log.info("live: skipped %d stale frame(s), now on %s", skipped, frame.id)
+            started = time.time()
             try:
                 sightings = await asyncio.to_thread(identify.carry_over, s.sd, frame, anchor, cfg)
                 if sightings is None:                # something new in view: analyse it
@@ -175,7 +194,14 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
                 store.write(s.sd, f"sightings/{frame.id}.json", sightings)
             except Exception as e:
                 log.warning("identify %s failed: %s", frame.id, e)
+                await s.down.put({"type": "frame", "frame_id": frame.id, "t": frame.t, "error": str(e)[:200]})
                 continue
+            books = [x for x in sightings if x.kind == "book"]
+            await s.down.put({"type": "frame", "frame_id": frame.id, "t": frame.t, "skipped": skipped,
+                              "carried": identify.is_carried(sightings), "ms": int((time.time() - started) * 1000),
+                              "books": len(books), "identified": sum(1 for x in books if x.accepted),
+                              "items": sum(1 for x in sightings if x.kind == "item"),
+                              "titles": [x.accepted.title for x in books if x.accepted][:6]})
             await push_inventory(s)
             for m in s.coach.update(sightings, s.now(), s.last_user_speech_t):
                 await s.down.put({"type": "coach", **m})
@@ -185,21 +211,27 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
                     await s.inject.put(f"STATUS {m['text']}")
 
     def current_objects(sd: Path):
-        """Same dedupe as the pipeline (tracking included), on the frames identified so far."""
-        frames = [f for f in store.read(sd, "frames.json", list[Frame], default=[])
-                  if (sd / "sightings" / f"{f.id}.json").exists()]
+        """Same dedupe as the pipeline (tracking included), on the frames identified so far.
+        -> (objects, frames uploaded, frames identified)."""
+        all_frames = store.read(sd, "frames.json", list[Frame], default=[])
+        frames = [f for f in all_frames if (sd / "sightings" / f"{f.id}.json").exists()]
         sightings = []
         for f in frames:
             sightings += store.read(sd, f"sightings/{f.id}.json", list[Sighting], default=[])
-        return dedupe.build_objects(sightings, frames, track.links(sd, frames, cfg), cfg)
+        return dedupe.build_objects(sightings, frames, track.links(sd, frames, cfg), cfg), len(all_frames), len(frames)
 
     async def push_inventory(s: SweepSession):
-        objs = await asyncio.to_thread(current_objects, s.sd)    # image alignment is CPU work: off the event loop
+        objs, n_frames, n_done = await asyncio.to_thread(current_objects, s.sd)   # CPU work: off the event loop
         books = [o for o in objs if o.kind == "book"]
+        common = lambda o: {"id": o.id, "status": o.status, "reason": o.reason, "frame": Path(o.frame_ref).name,
+                            "bbox": o.bbox, "seen": len(o.sighting_ids)}
         await s.down.put({"type": "inventory",
-                          "books": [{"id": o.id, "title": o.title, "status": o.status, "reason": o.reason} for o in books],
-                          "items": [{"id": o.id, "category": o.category} for o in objs if o.kind == "item"],
-                          "counts": {"books": len(books), "identified": sum(o.status == "identified" for o in books)}})
+                          "books": [{**common(o), "title": o.title, "author": o.author, "edition": o.edition,
+                                     "shelf": o.shelf, "confidence": o.id_confidence} for o in books],
+                          "items": [{**common(o), "category": o.category, "material": o.material,
+                                     "brand_model": o.brand_model} for o in objs if o.kind == "item"],
+                          "counts": {"books": len(books), "identified": sum(o.status == "identified" for o in books),
+                                     "frames": n_frames, "analysed": n_done}})
 
     async def finish(s: SweepSession):
         if s.finished:
@@ -207,7 +239,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
         s.finished = True
         await s.down.put({"type": "status", "text": "Building your claim packet…"})
         try:
-            await asyncio.to_thread(pipeline.run, s.sd, None, None, cfg, pipeline_deps or {})
+            packet = await asyncio.to_thread(pipeline.run, s.sd, None, None, cfg, pipeline_deps or {})
         except Exception as e:
             log.exception("pipeline failed")
             s.finished = False
@@ -215,7 +247,11 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
             return
         store.write(s.sd, "transcript.json", s.transcript)      # what was said, for the audit trail
         summary = (s.sd / "voice_summary.txt").read_text()
-        await s.down.put({"type": "packet_ready", "summary": summary, "report": f"/api/sweeps/{s.sweep_id}/report"})
+        await s.down.put({"type": "packet_ready", "summary": summary, "report": f"/api/sweeps/{s.sweep_id}/report",
+                          "packet": f"/api/sweeps/{s.sweep_id}/packet",
+                          "totals": packet.totals.model_dump() if packet else None,
+                          "review": len(packet.review_queue) if packet else None,
+                          "room": packet.room.model_dump() if packet and packet.room else None})
         await s.inject.put(f"PACKET_READY summary_facts=\"{summary}\"")
 
     # ------------------------------------------------------------------ routes
@@ -224,6 +260,52 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
         if not check_token(request.query_params.get("t")):    # stale QR / restarted server: say so plainly
             return HTMLResponse(EXPIRED_PAGE, status_code=401)
         return (WEB / "index.html").read_text()
+
+    @app.get("/dashboard", response_class=HTMLResponse)
+    def dashboard(request: Request):
+        """Laptop screen: records organised + everything happening live (open it next to the server)."""
+        if not check_token(request.query_params.get("t")):
+            return HTMLResponse(EXPIRED_PAGE, status_code=401)
+        return (WEB / "dashboard.html").read_text()
+
+    @app.get("/api/sweeps", dependencies=[Depends(require_token)])
+    def list_sweeps():
+        """Recent sweeps, newest first, for the dashboard's picker."""
+        out = []
+        root = Path(cfg.sweeps_dir)
+        for d in sorted(root.glob("sw_*"), reverse=True)[:50] if root.exists() else []:
+            meta = store.read(d, "meta.json", dict, default=None)
+            if not meta:
+                continue
+            live = app.state.sessions.get(d.name)
+            out.append({"id": d.name, "created_at": meta.get("created_at"), "country": meta.get("country"),
+                        "currency": meta.get("currency"), "frames": len(store.read(d, "frames.json", list, default=[])),
+                        "packet": (d / "claim_packet.json").exists(),
+                        "live": bool(live and live.phones > 0 and not live.finished)})
+        return out
+
+    @app.get("/api/sweeps/{sweep_id}/crop", dependencies=[Depends(require_token)])
+    def crop(sweep_id: str, f: str, b: str, w: int = 160):
+        """Thumbnail of one record: frame `f`, box `b` = "x0,y0,x1,y1", long side `w` px."""
+        if not store.FRAME_NAME_RE.match(f):
+            raise HTTPException(404)
+        try:
+            x0, y0, x1, y1 = (int(v) for v in b.split(","))
+        except ValueError:
+            raise HTTPException(400, "b must be x0,y0,x1,y1")
+        img = cv2.imread(str(get_dir(sweep_id) / "frames" / f))
+        if img is None:
+            raise HTTPException(404)
+        H, W = img.shape[:2]
+        mx, my = (x1 - x0) // 12, (y1 - y0) // 12
+        c = img[max(0, y0 - my):min(H, y1 + my), max(0, x0 - mx):min(W, x1 + mx)]
+        if not c.size:
+            raise HTTPException(400, "empty box")
+        k = min(1.0, max(40, min(w, 400)) / max(c.shape[:2]))
+        if k < 1:
+            c = cv2.resize(c, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", c, [cv2.IMWRITE_JPEG_QUALITY, 82])
+        return Response(buf.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
 
     @app.post("/api/sweeps", dependencies=[Depends(require_token)])
     async def create_sweep(request: Request):
@@ -273,6 +355,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
         text = f"Room measured: floor {room.floor_area_m2} m² ({room.length_m} × {room.width_m} m)" + \
                (f", height {room.height_m} m" if room.height_m else "")
         await s.down.put({"type": "status", "text": text})
+        await s.down.put({"type": "room", **room.model_dump()})
         await s.inject.put(f"STATUS {text}")
         return room.model_dump()
 
@@ -341,6 +424,8 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
             await ws.close(code=4404)
             return
         await ws.accept()
+        role = "dashboard" if ws.query_params.get("role") == "dashboard" else "phone"
+        q: asyncio.Queue = asyncio.Queue(maxsize=5000)
 
         async def reader():                               # nothing to read (voice is WebRTC); detects disconnects
             while True:
@@ -348,13 +433,28 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
 
         async def writer():
             while True:
-                await ws.send_text(json.dumps(await s.down.get()))
+                await ws.send_text(json.dumps(await q.get()))
 
+        if role == "dashboard":                           # catch up: what happened before this screen opened
+            meta = store.read(s.sd, "meta.json", dict, default={})
+            await ws.send_text(json.dumps({"type": "hello", "sweep_id": s.sweep_id, "meta": meta,
+                                           "phone": s.phones > 0, "finished": s.finished}))
+            for m in list(s.history):
+                await ws.send_text(json.dumps(m))
+        s.subs.add(q)
+        if role == "phone":
+            s.phones += 1
+            await s.down.put({"type": "phone", "connected": True})
         try:
             await push_inventory(s)
             await asyncio.gather(reader(), writer())
         except Exception:
             pass
+        finally:
+            s.subs.discard(q)
+            if role == "phone":
+                s.phones -= 1
+                await s.down.put({"type": "phone", "connected": s.phones > 0})
 
     app.mount("/static", StaticFiles(directory=WEB), name="static")
     return app

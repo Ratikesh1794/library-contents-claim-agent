@@ -98,3 +98,7 @@ h3{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted
 .xr p{margin:0 0 10px;font-size:15px}
 .xr .xrbuttons{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
 .xr .xrbuttons .btn{padding:10px 6px;font-size:14px}
+
+/* phone: two caption lines + a pointer to the laptop dashboard */
+.userline{color:var(--muted);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hint{color:var(--muted);font-size:13px;text-align:center;margin:10px 0}

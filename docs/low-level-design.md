@@ -118,6 +118,21 @@ Flow:
 
 **Shared** (`agent.execute_tool`): half-filled tool calls are rejected so the model asks instead of guessing; spoken shelf references are normalised to Coach regions ("shelf2", "second shelf", "top shelf" → `row2` / `row1`).
 
+### 3.2a Screens: phone and laptop dashboard
+
+- **Fan-out:** producers put messages on `SweepSession.down`; a per-session task copies each one to every open
+  WebSocket's own queue (`subs`) and keeps meaningful ones (final captions, coach, status, frame, agent state, room,
+  phone presence, packet) in a bounded `history` that a dashboard replays when it joins.
+- **`/ws/live?role=phone`** (default) and **`role=dashboard`** (gets `hello` {meta, phone connected, finished} + history).
+- New events: `frame` {frame_id, t, carried, ms, books, identified, items, titles, skipped | error}, `room`, `phone`
+  {connected}; `inventory` now carries author, edition, shelf, frame, bbox, frames seen, confidence and frame counts;
+  `packet_ready` carries totals, review count and room.
+- **HTTP:** `GET /dashboard?t=` (page), `GET /api/sweeps` (picker: newest first, live flag), `GET /api/sweeps/{id}/crop`
+  (record thumbnail from frame + box).
+- **Phone** (`web/app.js`): camera, voice controls, two caption lines, counts, Measure room, Finish. **Laptop**
+  (`web/dashboard.*`): KPIs, Books / Items / Review tables with thumbnails, search + filters, live activity, conversation,
+  packet panel; follows the newest (live) sweep unless the user picks one.
+
 ### 3.3 Agent contract
 
 Prompts live in `backend/prompts/` (Python constants): `agent.py: SYSTEM` (rules + `$country`/`$currency`), `coach.py: ASKS` (what to say per capture reason), `vision.py` (vision prompts).

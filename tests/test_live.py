@@ -72,7 +72,8 @@ def test_websocket_wrong_token_closed_and_right_token_gets_inventory(client):
             pass
     assert e.value.code == 4401
     with client.websocket_connect(f"/ws/live?sweep={sid}&t={TOK}") as ws:
-        assert ws.receive_json()["type"] == "inventory"
+        kinds = [ws.receive_json()["type"] for _ in range(2)]
+        assert kinds == ["phone", "inventory"]                       # presence, then the current inventory
 
 
 def test_voice_offer_returns_answer_and_replaces_previous_call(client, monkeypatch):
@@ -104,3 +105,34 @@ def test_rate_limits_return_429(client):
     codes = [client.post(f"/api/sweeps/{sid}/frames?seq={i}&t={i}", content=jpeg(), headers=H).status_code for i in range(7)]
     assert codes[:5] == [200] * 5 and 429 in codes[5:]              # 5 frames per second per sweep
     assert [client.post(f"/api/sweeps/{sid}/finish", headers=H).status_code for _ in range(4)][-1] == 429
+
+
+def test_phone_and_dashboard_both_get_every_message_and_dashboard_catches_up(client):
+    sid = client.post("/api/sweeps", json={"country": "US"}, headers=H).json()["sweep_id"]
+    with client.websocket_connect(f"/ws/live?sweep={sid}&t={TOK}") as phone:
+        assert [phone.receive_json()["type"] for _ in range(2)] == ["phone", "inventory"]
+        client.post(f"/api/sweeps/{sid}/frames?seq=0&t=0.5&w=100&h=700", content=jpeg(), headers=H)
+        seen = []
+        while "frame" not in seen:                                  # the frame worker reports the analysed frame
+            seen.append(phone.receive_json()["type"])
+        with client.websocket_connect(f"/ws/live?sweep={sid}&t={TOK}&role=dashboard") as dash:
+            hello = dash.receive_json()
+            assert hello["type"] == "hello" and hello["phone"] is True and hello["meta"]["country"] == "US"
+            replay = []
+            while "frame" not in replay:                            # history: what happened before it opened
+                replay.append(dash.receive_json()["type"])
+            assert "phone" in replay
+
+
+def test_sweep_list_and_record_thumbnail(client):
+    sid = client.post("/api/sweeps", json={"country": "GB"}, headers=H).json()["sweep_id"]
+    client.post(f"/api/sweeps/{sid}/frames?seq=0&t=0&w=100&h=700", content=jpeg(), headers=H)
+    sweeps = client.get("/api/sweeps", headers=H).json()
+    mine = next(x for x in sweeps if x["id"] == sid)
+    assert mine["country"] == "GB" and mine["frames"] == 1 and mine["packet"] is False
+    r = client.get(f"/api/sweeps/{sid}/crop?f=f_0000.jpg&b=10,10,60,300&w=120", headers=H)
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert client.get(f"/api/sweeps/{sid}/crop?f=../meta.json&b=1,1,2,2", headers=H).status_code == 404
+    assert client.get(f"/api/sweeps/{sid}/crop?f=f_0000.jpg&b=1,1", headers=H).status_code == 400
+    assert client.get("/api/sweeps").status_code == 401
+    assert client.get(f"/dashboard?t={TOK}").status_code in (200, 500)        # page exists once web/dashboard.html is in

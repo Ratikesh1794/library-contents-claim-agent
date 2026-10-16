@@ -36,46 +36,24 @@ function showCoach(text) {
   const c = $("coach"); c.textContent = text; c.hidden = false;
   clearTimeout(coachTimer); coachTimer = setTimeout(() => (c.hidden = true), CONFIG.coachBannerMs);
 }
-function addSystemLine(text) { const p = el("div", "sys", text); const t = $("transcript"); t.querySelector(".empty")?.remove(); t.append(p); stick(t); }
-function stick(panel) { panel.scrollTop = panel.scrollHeight; }
+// The phone stays simple: system messages flash on the camera banner; the full log is on the laptop dashboard.
+function addSystemLine(text) { if (!/^voice connected$/i.test(text)) showCoach(text); }
 
-// transcript bubbles, keyed by item id so streamed text lands in the right bubble
-const bubbles = new Map();
+// Two caption lines: the agent's last sentence and what the user last said (streamed text is joined per item id).
+const captions = new Map();
 function caption(m) {
-  const panel = $("transcript"); panel.querySelector(".empty")?.remove();
-  let b = bubbles.get(m.item_id);
-  if (!b) {
-    b = el("div", `msg ${m.role}`); b.append(el("small", null, m.role === "agent" ? "Assistant" : "You"), el("span"));
-    bubbles.set(m.item_id, b); panel.append(b);
-  }
-  const body = b.querySelector("span");
-  body.textContent = m.mode === "set" && m.text === "" && !body.textContent ? "" : (m.mode === "append" ? body.textContent + m.text : m.text);
-  b.classList.toggle("pending", m.role === "user" && !body.textContent);
-  if (m.role === "agent") $("agentLine").textContent = body.textContent;
-  stick(panel);
+  const text = m.mode === "append" ? (captions.get(m.item_id) || "") + m.text : m.text;
+  captions.set(m.item_id, text);
+  if (m.role === "agent") $("agentLine").textContent = text;
+  else $("userLine").textContent = text ? "You: " + text : "You: …";
 }
 
 function renderInventory(m) {
-  $("chipBooks").textContent = `${m.counts.books} book${m.counts.books === 1 ? "" : "s"}`;
-  $("chipItems").textContent = `${m.items.length} item${m.items.length === 1 ? "" : "s"}`;
-  $("tabCount").textContent = m.counts.books + m.items.length;
-  const books = $("books"), items = $("items"); books.replaceChildren(); items.replaceChildren();
-  m.books.forEach((b, i) => {
-    const li = el("li"); li.append(el("span", null, b.title || `Unidentified book #${i + 1}`));
-    li.append(el("span", `tag ${b.status === "identified" ? "ok" : "un"}`, b.status === "identified" ? "identified" : (b.reason || "unidentified").replace(/_/g, " ")));
-    books.append(li);
-  });
-  m.items.forEach((x) => { const li = el("li"); li.append(el("span", null, x.category || "item")); items.append(li); });
-  if (!m.books.length) books.append(el("li", null, "Nothing yet."));
-  if (!m.items.length) items.append(el("li", null, "Nothing yet."));
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  $("chipBooks").textContent = plural(m.counts.books, "book");
+  $("chipIdent").textContent = `${m.counts.identified} identified`;
+  $("chipItems").textContent = plural(m.items.length, "item");
 }
-
-function selectTab(name) {
-  const t = name === "transcript";
-  $("tabT").setAttribute("aria-selected", t); $("tabI").setAttribute("aria-selected", !t);
-  $("transcript").hidden = !t; $("inventory").hidden = t; if (t) stick($("transcript"));
-}
-$("tabT").onclick = () => selectTab("transcript"); $("tabI").onclick = () => selectTab("inventory");
 
 // ---------------------------------------------------------------- quality + keyframes (hi-res, to disk on the server)
 // Quality scores: same formulas as backend/quality.py, run on a 320px grayscale copy.

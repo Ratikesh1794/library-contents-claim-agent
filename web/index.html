@@ -38,6 +38,7 @@
       <div class="chips">
         <span class="chip rec"><i aria-hidden="true"></i><b id="timer">0:00</b></span>
         <span class="chip" id="chipBooks">0 books</span>
+        <span class="chip" id="chipIdent">0 identified</span>
         <span class="chip" id="chipItems">0 items</span>
       </div>
       <div id="coach" class="coach" role="status" aria-live="polite" hidden></div>
@@ -48,6 +49,7 @@
       <div class="agenttext">
         <div id="agentState" class="agentstate">Connecting…</div>
         <div id="agentLine" class="agentline"></div>
+        <div id="userLine" class="userline"></div>
       </div>
       <button id="mute" class="btn icon" aria-pressed="false">🎙 Mute</button>
     </div>
@@ -55,17 +57,7 @@
     <button id="measureRoom" class="btn wide" hidden>📐 Measure the room (floor corners)</button>
     <audio id="agentAudio" autoplay playsinline></audio>
 
-    <div class="tabs" role="tablist">
-      <button role="tab" id="tabT" aria-selected="true" aria-controls="transcript">Transcript</button>
-      <button role="tab" id="tabI" aria-selected="false" aria-controls="inventory">Inventory <span id="tabCount" class="badge">0</span></button>
-    </div>
-    <div id="transcript" class="panel" role="log" aria-live="polite" aria-label="Conversation transcript">
-      <p class="empty">The conversation will appear here as you speak.</p>
-    </div>
-    <div id="inventory" class="panel" role="tabpanel" hidden>
-      <h3>Books</h3><ul id="books" class="list"></ul>
-      <h3>Other items</h3><ul id="items" class="list"></ul>
-    </div>
+    <p class="hint">Full records, the transcript and live activity are on the laptop dashboard.</p>
 
     <div class="footer"><button id="finish" class="btn danger">Finish &amp; build packet</button></div>
   </section>
@@ -89,6 +81,7 @@
     <h1>Your claim packet is ready</h1>
     <p id="summary" class="lead"></p>
     <a id="reportLink" class="btn primary big" href="#">Open the report</a>
+    <p class="hint">Every record, with photos and the review queue, is on the laptop dashboard.</p>
   </section>
 </main>
 <script src="/static/app.js"></script>
