@@ -13,6 +13,7 @@
   </label>
   <label class="follow"><input type="checkbox" id="follow" checked> Follow new sweeps</label>
   <div class="spacer"></div>
+  <button id="showQr" class="btn small">📱 Phone QR</button>
   <span id="pillPhone" class="pill" data-s="off"><i></i><span>Phone offline</span></span>
   <span id="pillVoice" class="pill" data-s="off"><i></i><span>Voice idle</span></span>
   <span id="pillConn" class="pill" data-s="warn"><i></i><span>Connecting…</span></span>
@@ -27,6 +28,19 @@
     <div class="kpi"><b id="kFrames">0</b><span id="kFramesSub">frames</span></div>
     <div class="kpi"><b id="kRoom">—</b><span id="kRoomSub">room (not measured)</span></div>
     <div class="kpi"><b id="kValue">—</b><span id="kValueSub">replacement value</span></div>
+  </section>
+
+  <section id="connect" class="card connect" hidden>
+    <div id="qr" class="qr" aria-label="QR code for the phone"></div>
+    <div class="connecttext">
+      <h2>Connect your phone</h2>
+      <p>Scan this with the phone's camera, open the link, allow camera and microphone, then tap <b>Start sweep</b>.
+         This page fills in as the phone pans the shelves.</p>
+      <p class="link"><span id="phoneUrl"></span> <button id="copyUrl" class="btn small">Copy link</button></p>
+      <p id="httpsWarn" class="warn" hidden>This link is not HTTPS, so phones won't allow the camera. Start the server with
+         <code>scripts/run.sh</code> (it opens a secure tunnel).</p>
+      <button id="hideQr" class="btn small">Hide</button>
+    </div>
   </section>
 
   <section id="packet" class="card packet" hidden>

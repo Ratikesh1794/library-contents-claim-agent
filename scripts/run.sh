@@ -39,10 +39,8 @@ else
   echo "Install cloudflared or ngrok (or use scripts/mkcert_setup.sh). Serving on http://localhost:8000 only."; URL="http://localhost:8000"
 fi
 export PUBLIC_ORIGIN="${URL:-}"
-FULL="${URL:-http://localhost:8000}/?t=$SWEEP_TOKEN"
-echo; echo "Open on the phone:  $FULL"; $PY scripts/print_qr.py "$FULL"; echo
-# Laptop dashboard (records + live activity): opened automatically once the server is up.
+# Everything happens on the laptop dashboard, including the phone's QR code; it opens once the server is up.
 DASH="http://localhost:8000/dashboard?t=$SWEEP_TOKEN"
-echo "Laptop dashboard:  $DASH"; echo
+echo; echo "Dashboard: $DASH  (opening in your browser; the phone's QR code is there)"; echo
 command -v open >/dev/null && (sleep 3 && open "$DASH") &
 $PY -m uvicorn backend.live.app:app --host 0.0.0.0 --port 8000 --ws-max-size 4000000

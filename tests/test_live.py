@@ -136,3 +136,10 @@ def test_sweep_list_and_record_thumbnail(client):
     assert client.get(f"/api/sweeps/{sid}/crop?f=f_0000.jpg&b=1,1", headers=H).status_code == 400
     assert client.get("/api/sweeps").status_code == 401
     assert client.get(f"/dashboard?t={TOK}").status_code in (200, 500)        # page exists once web/dashboard.html is in
+
+
+def test_connect_gives_the_phone_link_and_a_qr_code(client):
+    assert client.get("/api/connect").status_code == 401
+    c = client.get("/api/connect", headers=H).json()
+    assert c["phone_url"].endswith(f"/?t={TOK}") and c["qr_svg"].lstrip().startswith("<") and "svg" in c["qr_svg"]
+    assert c["https"] is False                                    # test client is plain http: the page warns

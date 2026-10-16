@@ -25,7 +25,7 @@ Browsers only allow the camera and microphone over HTTPS, so the server is reach
 
 ```bash
 brew install ngrok         # once, then: ngrok config add-authtoken <your token>
-scripts/run.sh             # starts the server + tunnel, prints the link and a QR code
+scripts/run.sh             # starts the server + tunnel and opens the laptop dashboard (phone QR is there)
 ```
 
 Scan the QR code, allow camera and microphone, keep the screen on, tap **Start sweep**, and talk.
@@ -104,7 +104,7 @@ backend/
                      frankfurter, null_reconstructor
   templates/         report.html.j2
 web/                 index.html, app.js, style.css (phone); dashboard.html, dashboard.js, dashboard.css (laptop)
-scripts/             run.sh (server + tunnel + QR), mkcert_setup.sh, print_qr.py
+scripts/             run.sh (server + tunnel; opens the dashboard), mkcert_setup.sh
 tests/               one small file per stage; fakes.py holds the fake services
 docs/                system and low-level design
 sweeps/<id>/         one folder per sweep (not committed): meta, frames/, sightings, links, objects,

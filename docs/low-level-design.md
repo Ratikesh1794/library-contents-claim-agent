@@ -34,7 +34,6 @@ web/
 scripts/
   run.sh             server + tunnel (ngrok fixed domain or random), prints URL + QR with the sweep token
   mkcert_setup.sh    optional local HTTPS path
-  print_qr.py        terminal QR code
 tests/
   test_*.py          one small file per stage; fakes.py holds fake services
 ground_truth/        csv + notes (not committed if private)
@@ -171,7 +170,7 @@ Server (laptop):
 
 `scripts/run.sh`:
 1. If `NGROK_DOMAIN` is set (in `.env`): `ngrok http 8000 --url=https://$NGROK_DOMAIN`, wait for "started tunnel"; on failure print ngrok's error and exit (no server with a dead link). Else `cloudflared` quick tunnel, else ngrok random URL.
-2. Print `https://<domain>/?t=<token>` and a terminal QR code (`scripts/print_qr.py`).
+2. Open the laptop dashboard (`http://localhost:8000/dashboard?t=<token>`); its "Connect your phone" card shows the phone link `https://<domain>/?t=<token>` as a QR code (`GET /api/connect`, built from `PUBLIC_ORIGIN`).
 3. Start `uvicorn backend.live.app:app --host 0.0.0.0 --port 8000`; the tunnel is stopped on exit.
 
 Local-HTTPS alternative: `scripts/mkcert_setup.sh` (`mkcert <laptop-ip> localhost`, uvicorn with `--ssl-*`, install the mkcert root CA on the phone).

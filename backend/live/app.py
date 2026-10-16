@@ -26,6 +26,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import cv2
+import qrcode
+import qrcode.image.svg
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -267,6 +269,14 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
         if not check_token(request.query_params.get("t")):
             return HTMLResponse(EXPIRED_PAGE, status_code=401)
         return (WEB / "dashboard.html").read_text()
+
+    @app.get("/api/connect", dependencies=[Depends(require_token)])
+    def connect_info(request: Request):
+        """The phone's link and its QR code (SVG) for the dashboard. Uses the public HTTPS origin from run.sh."""
+        origin = (cfg.public_origin or str(request.base_url)).rstrip("/")
+        url = f"{origin}/?t={app.state.token}"
+        svg = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage, border=2).to_string().decode()
+        return {"phone_url": url, "qr_svg": svg, "https": url.startswith("https://")}
 
     @app.get("/api/sweeps", dependencies=[Depends(require_token)])
     def list_sweeps():

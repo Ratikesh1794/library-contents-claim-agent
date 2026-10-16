@@ -9,6 +9,7 @@ mkdir -p certs && mkcert -cert-file certs/cert.pem -key-file certs/key.pem "$IP"
 export SWEEP_TOKEN="${SWEEP_TOKEN:-$(.venv/bin/python -c 'from dotenv import dotenv_values;print(dotenv_values(".env").get("SWEEP_TOKEN") or "")')}"
 export SWEEP_TOKEN="${SWEEP_TOKEN:-$(.venv/bin/python -c 'import secrets;print(secrets.token_urlsafe(12))')}"
 export PUBLIC_ORIGIN="https://$IP:8000"
-echo "Open on the phone: https://$IP:8000/?t=$SWEEP_TOKEN"
-.venv/bin/python scripts/print_qr.py "https://$IP:8000/?t=$SWEEP_TOKEN"
+DASH="https://localhost:8000/dashboard?t=$SWEEP_TOKEN"
+echo "Dashboard: $DASH  (opening in your browser; the phone's QR code is there)"
+command -v open >/dev/null && (sleep 3 && open "$DASH") &
 .venv/bin/python -m uvicorn backend.live.app:app --host 0.0.0.0 --port 8000 --ssl-keyfile certs/key.pem --ssl-certfile certs/cert.pem --ws-max-size 4000000
