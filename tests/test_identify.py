@@ -22,9 +22,9 @@ def test_orient_picks_best(tmp_path):
 
 
 def test_no_promote(tmp_path):
-    v = FakeVision([UPRIGHT], reads=[SpineRead("Dnne", None, None, True)] * 2)
+    v = FakeVision([UPRIGHT], reads=[SpineRead("Dnne", "Frank Herbert", None, True)] * 2)
     s = run_one(tmp_path, v, FakeCatalogue({"dnne": [cand("Quantum Gardening")]}))[0]
-    assert s.raw_text == "Dnne" and s.accepted is None and s.reason == "no_catalogue_match"
+    assert s.raw_text == "Dnne | Frank Herbert" and s.accepted is None and s.reason == "no_catalogue_match"
 
 
 def test_blur_skips_the_read(tmp_path):

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_va
 
 Status = Literal["identified", "unidentified", "needs_appraisal"]
 Reason = Literal["too_far", "blur", "glare", "too_dark", "blocked", "partial", "stack_hidden",
-                 "no_catalogue_match", "low_confidence", "user_skipped"]
+                 "no_catalogue_match", "low_confidence", "user_skipped", "author_not_visible", "ambiguous_match"]
 Layout = Literal["upright", "flat", "stacked", "cover_only", "unknown"]
 BBox = tuple[int, int, int, int]  # x0, y0, x1, y1 in frame px
 
@@ -36,6 +36,8 @@ class Candidate(BaseModel):
     isbn: str | None = None
     publishers: list[str] = []
     year: int | None = None   # EDITION year only (used for the antiquarian rule)
+    edition_level: bool = False   # True if this record is ONE edition (its ISBN/year belong to that edition);
+                                  # False for work-level records that merge many editions (Open Library search)
     edition: str | None = None
     source_url: str
     score: float = 0.0

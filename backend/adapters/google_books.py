@@ -25,6 +25,6 @@ class GoogleBooks:
                 title=v.get("title", ""), author=(v.get("authors") or [None])[0],
                 isbn=ids.get("ISBN_13") or ids.get("ISBN_10"),
                 publishers=[v["publisher"]] if v.get("publisher") else [],
-                year=int(year) if year.isdigit() else None,
+                year=int(year) if year.isdigit() else None, edition_level=True,
                 source_url=v.get("infoLink") or it.get("selfLink", "")))
         return out

@@ -1,5 +1,5 @@
 """Every tunable lives here (one frozen dataclass). Stages take `cfg=CFG` so tests can
-override with `dataclasses.replace(CFG, accept_T=0.9)`. Nothing is hard-coded inline.
+override with `dataclasses.replace(CFG, title_match_T=0.9)`. Nothing is hard-coded inline.
 
 Country and currency are NOT config: they come per sweep from meta.json.
 """
@@ -50,10 +50,12 @@ class Config:
     min_box_px: int = 900
     max_spine_aspect: float = 40.0
     occl_iou: float = 0.3
-    accept_T: float = 0.85     # catalogue match needed to call a book "identified"
-    review_T: float = 0.9      # below this, an identified line also goes to review
-    ambiguity_gap: float = 0.05
-    ambiguity_penalty: float = 0.2
+    # Strict identity (catalogue.resolve): a book is identified ONLY if the title AND the author read from the
+    # spine both match the same catalogue record; anything else stays undefined (None). Never a guess.
+    title_match_T: float = 0.85    # read title vs record title (or its main title before a subtitle), symmetric
+    author_match_T: float = 0.8    # read author vs record author (surname-only or truncated spines still match)
+    publisher_match_T: float = 0.85  # edition/year/ISBN are recorded only when the spine's publisher matches too
+    review_T: float = 0.9      # below this match score, an identified line also goes to review
     orient_early_exit: bool = True
     target_text_px: int = 32
     max_upscale: float = 3.0

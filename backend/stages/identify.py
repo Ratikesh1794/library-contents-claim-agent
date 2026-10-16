@@ -2,7 +2,7 @@
 
 Per keyframe: segment -> quality gate -> occlusion check -> crop/upscale -> orient -> read -> match.
 No-guess rules (enforced here and in catalogue.resolve):
-  * a title only ever comes from a catalogue Candidate that passed accept_T
+  * title, author, edition and ISBN only ever come from a catalogue record the spine confirms (catalogue.resolve)
   * the raw read is stored in `raw_text` and never promoted
   * two rotations that accept different works => unidentified/low_confidence
 

@@ -15,7 +15,7 @@ Needs Python 3.12 and an OpenAI API key.
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements.txt
 source .venv/bin/activate
-pytest                     # 68 offline tests; every external service is faked
+pytest                     # 71 offline tests; every external service is faked
 cp .env.example .env       # then fill in OPENAI_API_KEY (see "Configuration" below)
 ```
 
@@ -124,7 +124,7 @@ Stages never call each other. They read and write files in the sweep folder, so 
 
 ## Honesty rules enforced in code
 
-- A book title only comes from a catalogue match above `accept_T`; the vision model's raw read is stored as `raw_text` and never promoted.
+- **Strict identity:** a book is identified only when the title **and** the author read from its spine both match the same catalogue record (and no other matching record is a different book). Edition and year are recorded only when the spine's publisher matches too; the ISBN only when, in addition, the record is a single edition. Everything unconfirmed stays blank (`None`). The vision model's raw read is kept as `raw_text` for audit and never promoted to a field.
 - A price exists only with source + URL + retrieval time (`schemas.Price` refuses otherwise). No listing → blank, excluded from totals, review queue.
 - Signed, pre-1900, above-threshold, or art without "it's a print" → `needs_appraisal`, never priced.
 - Totals are computed in code (`stages/assemble.py: compute_totals`) and re-checked after validation. No LLM does arithmetic.

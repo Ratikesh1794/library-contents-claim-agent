@@ -1,5 +1,6 @@
-"""Open Library search -> Candidates. Free, no key. Work-level data: `first_publish_year` is
-the WORK's year, so it is deliberately not used as an edition year."""
+"""Open Library search -> Candidates. Free, no key. Records are WORK-level (many editions merged): their
+ISBN and `first_publish_year` belong to no particular copy, so edition_level=False and they are never
+recorded as this copy's ISBN or edition year (see catalogue.resolve)."""
 from __future__ import annotations
 
 from backend.core.http import get_json

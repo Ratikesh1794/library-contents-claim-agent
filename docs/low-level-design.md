@@ -183,16 +183,23 @@ Input: `frames/*.jpg`, `frames.json`. Output: `sightings.json`.
 2. **Quality per crop** (section 4). If `too_far` / `blur` / `glare` / `dark`: write a Sighting with `reason`, no read attempt. (Saves cost, feeds Coach.)
 3. **Occlusion check.** If an `item` box overlaps a `book` box by > `occl_iou`, set `reason=blocked`. If a box touches frame edge, `partial`.
 4. **Rectify + upscale.** Crop with 8% margin. If a marker homography exists for that shelf plane, warp to fronto-parallel. Upscale so text height ≥ 32 px (Lanczos; cap 3×).
-5. **Orient.** Layout `upright` and h/w > 2.5: candidates = rotate +90°, −90°. `flat`: 0° and 180°. Unknown: 0/90/180/270. Run read on each; keep highest catalogue score. Early exit if the first rotation scores ≥ `accept_T`.
+5. **Orient.** Layout `upright` and h/w > 2.5: candidates = rotate +90°, −90°. `flat`: 0° and 180°. Unknown: 0/90/180/270. Run read on each; keep the best catalogue match. Early exit at the first rotation that is identified.
 6. **Read.** Vision model on the crop only. Prompt: *"Transcribe only text visible on this book spine. Return JSON {title, author, publisher, legible: bool}. If not legible, legible=false and leave fields null. Do not use outside knowledge to complete missing words."* Temperature 0. Schema-constrained output.
-7. **Match** (`catalogue.py`): query Open Library `search.json` with title+author, fall back to Google Books `volumes?q=intitle:+inauthor:`. Score = weighted token-set ratio on title (0.7) + author (0.3), penalised if multiple near-equal candidates (ambiguity). Accept if `score ≥ accept_T` (default 0.85) **and** `legible`. Else `unidentified`, `reason=no_catalogue_match` or `low_confidence`.
+7. **Match** (`backend/stages/catalogue.py: resolve`), strict identity, field by field:
+   - No legible title → `low_confidence`; no author visible on the spine → `author_not_visible`. Neither makes a catalogue call.
+   - Query Open Library `search.json` with title + author, fall back to Google Books.
+   - A record matches only if **title** (symmetric similarity against the full title or the main title before a subtitle, ≥ `title_match_T` 0.85, so "Dune" never matches "Dune Messiah") **and author** (order-insensitive, surname-only or truncated spines allowed, ≥ `author_match_T` 0.8) both match.
+   - Two matching records that are different books (other title, or a different person: "Jane Austen" ≠ "Jane Austen Leigh") → `ambiguous_match`, undefined.
+   - **Edition** and **year** only if the spine's publisher matches the record (≥ `publisher_match_T`); year only from a single-edition record. **ISBN** only if the edition is verified **and** the record is a single edition (`edition_level`); Open Library search records merge many editions, so their ISBN is never recorded.
+   - Otherwise `unidentified` (`no_catalogue_match` / `low_confidence`), every field `None`.
 8. **Items.** For `kind=item`: one call per crop returns `{category, material, brand_model|null, approx_dims_hint}`; brand/model only if text/logo is visible in the crop. Category from a fixed list in config.
 
 ### 5.2 No-guess rules (enforced in code)
 
 - `title` is written only from a `Candidate` that passed step 7. The LLM's raw read is stored in `raw_text` and never promoted to `title`.
 - If two rotations give different accepted titles → `unidentified`, `low_confidence`.
-- Edition: only when candidate record exposes it and the crop contains matching publisher/year text.
+- Edition, year, ISBN: only when verified as in step 7; otherwise `None`.
+- Title-only spines are never identified (the author can't be confirmed); they are counted and measured as `unidentified` (`author_not_visible`).
 - `id_confidence` = match score × read-legibility prior; recorded for review-queue thresholds.
 
 ### 5.3 Concurrency and cost control
@@ -363,7 +370,7 @@ Metrics:
 models:   vision_model=gpt-4.1-mini  live_model=gpt-realtime-mini  transcribe_model=gpt-4o-mini-transcribe  voice=alloy
 voice:    noise_reduction=far_field  vad_threshold=0.7  vad_silence_ms=700  vad_prefix_ms=300
 quality:  blur_norm_px=128 blur_min=80 glare_max=0.04 dark_min=60(p99) min_text_px=12
-identify: min_box_px=900 occl_iou=0.3 accept_T=0.85 review_T=0.9 crop_workers=6 identify_workers=6 reuse_iou=0.5
+identify: min_box_px=900 occl_iou=0.3 title_match_T=0.85 author_match_T=0.8 publisher_match_T=0.85 review_T=0.9 crop_workers=6 identify_workers=6 reuse_iou=0.5
 tracking: track_max_side=1024 track_features=2000 track_min_inliers=25 track_span=2 track_iou=0.3 item_contain_weight=0.6
 coach:    asks_per_region=2 ask_gap_s=8 settle_s=2
 price:    list_T=0.8 appraisal_threshold_usd=100 (converted via FX at runtime) antiquarian_year=1900 condition_assumed="good"
