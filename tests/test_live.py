@@ -97,3 +97,10 @@ def test_voice_rejects_bad_offer_missing_token_and_missing_key(client, monkeypat
     assert client.post(f"/api/sweeps/{sid}/voice", content="not sdp", headers=H).status_code == 400
     monkeypatch.delenv("OPENAI_API_KEY")
     assert client.post(f"/api/sweeps/{sid}/voice", content="v=0", headers=H).status_code == 503
+
+
+def test_rate_limits_return_429(client):
+    sid = client.post("/api/sweeps", json={}, headers=H).json()["sweep_id"]
+    codes = [client.post(f"/api/sweeps/{sid}/frames?seq={i}&t={i}", content=jpeg(), headers=H).status_code for i in range(7)]
+    assert codes[:5] == [200] * 5 and 429 in codes[5:]              # 5 frames per second per sweep
+    assert [client.post(f"/api/sweeps/{sid}/finish", headers=H).status_code for _ in range(4)][-1] == 429

@@ -61,6 +61,11 @@ class Config:
     identify_workers: int = 6
     crop_workers: int = 6        # spine reads run in parallel within one frame
     reuse_iou: float = 0.5       # a box that tracks onto an already-identified box reuses that read (no new API call)
+    # "Only analyse what is new": a live keyframe mostly showing the last ANALYSED frame copies its results instead of
+    # calling the vision model again (identify.carry_over). Never when the user moved closer or the view had fixable failures.
+    novelty_skip_coverage: float = 0.85   # skip detection if this much of the new frame was already analysed
+    novelty_max_zoom: float = 1.15        # ...and things look at most this much bigger (moving closer = re-read)
+    retry_reasons: tuple[str, ...] = ("blur", "glare", "too_dark", "too_far", "blocked", "partial")
 
     # --- coach
     asks_per_region: int = 2
@@ -109,6 +114,12 @@ class Config:
     ws_message_max_bytes: int = 4_000_000
     public_origin: str = os.environ.get("PUBLIC_ORIGIN", "")
     allowed_origins: tuple[str, ...] = ()
+
+    # --- rate limits per sweep: (max requests, per seconds); over the limit => HTTP 429, the phone retries
+    rate_frames: tuple[int, float] = (5, 1.0)
+    rate_voice: tuple[int, float] = (6, 60.0)
+    rate_finish: tuple[int, float] = (3, 60.0)
+    rate_new_sweep: tuple[int, float] = (10, 60.0)
 
     # --- pipeline budgets (seconds); stages that overrun mark themselves incomplete
     budget_identify_s: float = 60.0

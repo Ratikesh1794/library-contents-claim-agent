@@ -15,7 +15,7 @@ Needs Python 3.12 and an OpenAI API key.
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements.txt
 source .venv/bin/activate
-pytest                     # 62 offline tests; every external service is faked
+pytest                     # 68 offline tests; every external service is faked
 cp .env.example .env       # then fill in OPENAI_API_KEY (see "Configuration" below)
 ```
 
@@ -95,9 +95,10 @@ Stages never call each other. They read and write files in the sweep folder, so 
 
 ### How a sweep flows
 
-1. The phone uploads sharp, changed **video frames** as keyframes; the server identifies each one as it arrives
-   (find boxes → quality gate → read the spine → match a real catalogue record), reusing reads for books
-   already identified in the previous frame.
+1. The phone uploads sharp, changed **video frames** as keyframes. The server works on the newest one; if most of
+   it was already analysed, it copies those results with no model calls. Otherwise it analyses it (find boxes →
+   quality gate → read the spine and check it really is a book → match a real catalogue record), reusing reads for
+   books already identified.
 2. Overlapping frames are aligned (`stages/track.py`), so one physical book counts once whether or not it was read.
 3. The **voice agent** runs over WebRTC directly between the phone and OpenAI. The server creates the call
    (the API key stays on the laptop), listens alongside it to run tools (skip a shelf, "that one is signed",
@@ -132,14 +133,15 @@ Stages never call each other. They read and write files in the sweep folder, so 
 
 ## Status
 
-**Built and tested:** quality gating, identification (parallel reads, read-once reuse), catalogue matching,
+**Built and tested:** quality gating, identification (skip already-seen views, newest frame first, parallel reads,
+read-once reuse, not-a-book check), per-sweep rate limits, catalogue matching,
 frame tracking + dedupe, Coach, marker scale, book dimensions, room math (on synthetic points), pricing with FX and
 appraisal rules, packet assembly and validation, self-contained report, pipeline, eval, ingest, API auth and limits,
 WebRTC voice signalling and the sideband agent. The voice path was verified end to end with a scripted WebRTC client
 against real OpenAI.
 
 **Known issues**
-- Non-books (e.g. a perfume box) can be detected and read as books.
+- Non-books are rejected by a check in the spine-read call (verified on a small real sample); detector boxes can still be loose.
 - Background voices (TV, other people) still trigger the agent in hands-free mode; use hold-to-talk there.
 - Without eBay keys every price is blank.
 - Item counts after tracking have not yet been checked on a sweep captured with the new camera path.

@@ -148,7 +148,9 @@ Server (laptop):
 
 Local-HTTPS alternative: `scripts/mkcert_setup.sh` (`mkcert <laptop-ip> localhost`, uvicorn with `--ssl-*`, install the mkcert root CA on the phone).
 
-Tests: request without token rejected; WS with wrong token closed; same-origin API call accepted; oversized keyframe rejected; voice offer validated (bad SDP 400, no key 503) and a new offer replaces the previous call.
+Rate limits per sweep (sliding window, HTTP 429; the phone retries): frames 5/s, voice offers 6/min, finish 3/min, new sweeps 10/min.
+
+Tests: request without token rejected; WS with wrong token closed; same-origin API call accepted; oversized keyframe rejected; rate limits return 429; voice offer validated (bad SDP 400, no key 503) and a new offer replaces the previous call.
 
 ## 4. Quality gating (`backend/stages/quality.py`)
 
@@ -195,6 +197,8 @@ Input: `frames/*.jpg`, `frames.json`. Output: `sightings.json`.
 
 ### 5.3 Concurrency and cost control
 
+- **Only analyse what is new** (`identify.carry_over`): a keyframe that mostly shows the last *analysed* frame (≥ `novelty_skip_coverage` 85% of it already seen, measured with the tracking homography) copies that frame's sightings (`carried_from` set) and makes no model calls. It is analysed anyway if the camera moved closer (things > `novelty_max_zoom` 1.15× bigger), or if the analysed frame had fixable failures (blur, glare, too far…), since the user may be fixing them. Comparing with the last analysed frame, not the previous carried one, stops a slow pan from drifting without ever looking at books entering the edge. The batch run applies the same rule in time order, so frames the live worker skipped are cheap too.
+- **Newest frame first** (live): the frame worker drains its queue and works on the most recent keyframe, so the panel and coach tips match what the camera shows now; skipped frames are identified at finish.
 - Crops within a frame are read in parallel (`crop_workers=6`); batch runs process frames in parallel (`identify_workers=6`).
 - **Read once:** in the live path each frame gets the previous frame; its identified book boxes are projected into the new frame with the tracking homography (`backend/stages/track.py`) and a new box with IoU ≥ `reuse_iou` (0.5) copies that read instead of calling the model again.
 - Every vision response is cached by `(model, prompt text, image hash)` and every catalogue/price/FX response by request, so re-runs are free.
@@ -389,6 +393,10 @@ Model names, voice and noise settings can be overridden in `.env`.
 - Catalogue misses for regional or older titles (leads to honest `unidentified`).
 - Used-price comparability (different editions in one listing pool).
 
+### 5.5 Not-a-book check
+
+The spine-read call also returns `is_book`: whether the crop is *mainly* one book spine. Crops that mainly show something else (a perfume box, bottle, DVD…) are dropped, so they are never counted or priced. No extra model call. On a real sweep this rejected a perfume box ("ARABIAN AROMA") whose detector box also clipped a real book, while three real spines passed.
+
 ## 16. Implementation status (as built, 2026-10-17)
 
 Changes from the original design, and why:
@@ -400,6 +408,7 @@ Changes from the original design, and why:
 | Quality | Raw Laplacian variance, mean luma | Fixed-size blur, 99th-percentile darkness | The old gates rejected 78/97 readable crops on a real sweep |
 | Dedupe | Rows linked by marker plane or identified neighbours | Frame-to-frame homography tracking | Neighbour anchors fail when few books are identified |
 | Prompts | Inline in code | `backend/prompts/` constants | One place to edit what models are told |
+| Per-frame cost | Detect every keyframe | Carry over already-seen views; newest frame first; not-a-book check in the read call | Fewer model calls, live panel stays current, fewer false books |
 | Models | Unspecified | Mini models by default | Cost |
 
 Built and covered by tests: quality gating, identify (segment/orient/read/match, parallel reads, read-once reuse), catalogue matching, tracking + dedupe, Coach, marker scale, book dimensions, room math (synthetic points), pricing (FX, appraisal rules), assemble/validation, self-contained report, pipeline, eval, ingest, API auth/limits, WebRTC voice signalling + sideband agent. Voice verified end to end with a scripted WebRTC client against real OpenAI.
@@ -411,7 +420,7 @@ Not built yet:
 - A second price source (eBay serves both new and used; without eBay keys every price is blank); item dimensions (text hint only).
 
 Known issues:
-- Non-books (e.g. a perfume box) are detected and read as books: the vision model boxes and labels loosely.
+- Non-books: the read-time `is_book` check rejects them (verified on a small real sample); the detector still draws loose boxes that can mix an object and a book.
 - Background **voices** (TV, people) still trigger the agent in hands-free mode; noise reduction and the VAD threshold only remove hiss and hum. Use hold-to-talk in those rooms.
 - Item counts after tracking are unverified on a sweep captured with the new camera path.
 

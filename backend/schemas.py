@@ -64,6 +64,7 @@ class Sighting(BaseModel):
     shelf_hint: str | None = None       # "row1", "row2" ... top-down within the frame
     crop_blur: float | None = None
     item: ItemGuess | None = None
+    carried_from: str | None = None     # set when copied from an earlier analysed frame (view already seen), not detected here
 
 
 class UserFact(BaseModel):

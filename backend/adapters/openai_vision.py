@@ -42,6 +42,7 @@ class _Dets(BaseModel):
 
 
 class _Read(BaseModel):
+    is_book: bool = True
     title: str | None = None
     author: str | None = None
     publisher: str | None = None
@@ -112,7 +113,7 @@ class OpenAIVision:
 
     def read_spine(self, crop: np.ndarray) -> SpineRead:
         r, _ = self._ask("read", prompts.READ_SPINE, crop, _Read)
-        return SpineRead(r.title, r.author, r.publisher, r.legible)
+        return SpineRead(r.title, r.author, r.publisher, r.legible, r.is_book)
 
     def describe_item(self, crop: np.ndarray) -> ItemGuess:
         r, _ = self._ask("item", prompts.DESCRIBE_ITEM, crop, _Item, categories=", ".join(self.cfg.item_categories))

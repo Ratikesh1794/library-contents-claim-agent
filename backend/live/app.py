@@ -18,6 +18,7 @@ import logging
 import os
 import secrets
 import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -66,6 +67,22 @@ class SweepSession:
         return time.time() - self.t0
 
 
+class RateLimit:
+    """Sliding-window limiter: at most `n` hits per `per` seconds for each key. Over the limit => HTTP 429."""
+
+    def __init__(self):
+        self.hits: dict[tuple, deque] = defaultdict(deque)
+
+    def check(self, key: tuple, limit: tuple[int, float]) -> None:
+        n, per = limit
+        now, q = time.monotonic(), self.hits[key]
+        while q and now - q[0] >= per:
+            q.popleft()
+        if len(q) >= n:
+            raise HTTPException(429, "Too many requests, slow down")
+        q.append(now)
+
+
 class Hooks:
     """What the voice agent's tools do to the app. Agent tools write USER FACTS only."""
     def __init__(self, s: SweepSession, finish):
@@ -98,6 +115,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
     app.state.sessions = {}
     app.state.deps = {"vision": vision, "catalogue": catalogue}
     app.state.voice = voice
+    limits = RateLimit()
 
     # ------------------------------------------------------------------ auth
     def check_token(t: str | None) -> bool:
@@ -135,13 +153,21 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
         """Identify keyframes as they arrive; update the panel and let the Coach react."""
         d = app.state.deps
         vision, cat = d["vision"] or deps.vision(), d["catalogue"] or deps.catalogue()
-        prev = None                                  # (frame, sightings) of the last frame: lets identify reuse reads
+        anchor = None                                # (frame, sightings) of the last ANALYSED frame
         while True:
             frame: Frame = await s.frame_q.get()
+            skipped = 0
+            while not s.frame_q.empty():             # stay current: work on the newest frame; the ones skipped
+                frame = s.frame_q.get_nowait()       # here are identified at finish (identify.run)
+                skipped += 1
+            if skipped:
+                log.info("live: skipped %d stale frame(s), now on %s", skipped, frame.id)
             try:
-                sightings = await asyncio.to_thread(identify.identify_frame, s.sd, frame, vision, cat, cfg, prev)
+                sightings = await asyncio.to_thread(identify.carry_over, s.sd, frame, anchor, cfg)
+                if sightings is None:                # something new in view: analyse it
+                    sightings = await asyncio.to_thread(identify.identify_frame, s.sd, frame, vision, cat, cfg, anchor)
+                    anchor = (frame, sightings)
                 store.write(s.sd, f"sightings/{frame.id}.json", sightings)
-                prev = (frame, sightings)
             except Exception as e:
                 log.warning("identify %s failed: %s", frame.id, e)
                 continue
@@ -196,6 +222,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
 
     @app.post("/api/sweeps", dependencies=[Depends(require_token)])
     async def create_sweep(request: Request):
+        limits.check(("new_sweep",), cfg.rate_new_sweep)
         body = await request.json() if await request.body() else {}
         sd = store.new_sweep(body.get("country"), body.get("currency") or "USD", cfg.sweeps_dir, device=body.get("device"))
         session_for(sd.name)
@@ -204,6 +231,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
     @app.post("/api/sweeps/{sweep_id}/frames", dependencies=[Depends(require_token)])
     async def upload_frame(sweep_id: str, request: Request, seq: int, t: float, w: int = 0, h: int = 0,
                            blur: float = 0, glare: float = 0, dark: float = 0):
+        limits.check((sweep_id, "frames"), cfg.rate_frames)
         if int(request.headers.get("content-length") or 0) > cfg.keyframe_max_bytes:
             raise HTTPException(413, "keyframe too large")
         body = await request.body()
@@ -224,6 +252,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
     @app.post("/api/sweeps/{sweep_id}/voice", dependencies=[Depends(require_token)])
     async def start_voice(sweep_id: str, request: Request):
         """WebRTC signalling: SDP offer in, SDP answer out. One call per sweep; a new offer replaces the old call."""
+        limits.check((sweep_id, "voice"), cfg.rate_voice)
         if not os.environ.get("OPENAI_API_KEY"):
             raise HTTPException(503, "Voice agent disabled: OPENAI_API_KEY not set")
         offer = (await request.body()).decode(errors="replace")
@@ -245,6 +274,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
 
     @app.post("/api/sweeps/{sweep_id}/finish", dependencies=[Depends(require_token)])
     async def finish_route(sweep_id: str):
+        limits.check((sweep_id, "finish"), cfg.rate_finish)
         s = session_for(sweep_id)
         asyncio.create_task(finish(s))
         return {"ok": True}

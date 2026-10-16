@@ -76,3 +76,10 @@ def test_loosely_boxed_item_still_tracks_but_different_categories_do_not():
     L = {("f_0000", "f_0001"): shift(0)}
     assert len(build_objects([tight, loose], [fr(0), fr(1)], L)) == 1          # lamp boxed tight, then with its table
     assert len(build_objects([tight, other], [fr(0), fr(1)], L)) == 2          # a rug is not the lamp
+
+
+def test_evidence_prefers_a_detected_box_over_a_carried_copy():
+    real = book(0, 100, "Dune")
+    copy = book(1, 70, "Dune").model_copy(update={"carried_from": real.id, "crop_blur": 999.0})
+    objs = build_objects([real, copy], [fr(0), fr(1)], {("f_0000", "f_0001"): shift(-30)})
+    assert len(objs) == 1 and objs[0].frame_ref == "frames/f_0000.jpg"

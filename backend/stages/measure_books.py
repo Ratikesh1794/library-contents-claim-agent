@@ -35,6 +35,7 @@ def run(sd: Path, cfg: Config = CFG) -> None:
     geo.books = {}
     for o in (o for o in objs if o.kind == "book"):
         cands = [sightings[i] for i in o.sighting_ids if i in sightings and sightings[i].frame_id in geo.scale]
+        cands = [c for c in cands if not c.carried_from] or cands      # measure on a detected box, not a copied one
         if not cands:
             geo.books[o.id] = BookDims(reason="no_scale")
             continue

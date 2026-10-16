@@ -65,3 +65,9 @@ def test_book_already_identified_in_previous_frame_is_not_read_again(tmp_path):
     calls = v.read_calls
     second = identify.identify_frame(sd, frames[1], v, cat, CFG, prev=(frames[0], first))
     assert second[0].accepted.title == "Dune" and v.read_calls == calls         # reused, no new read
+
+
+def test_crop_the_reader_says_is_not_a_book_is_dropped(tmp_path):
+    v = FakeVision([UPRIGHT], reads=[SpineRead(None, None, None, False, is_book=False)])
+    c = FakeCatalogue({})
+    assert run_one(tmp_path, v, c) == [] and c.calls == 0      # e.g. a perfume box: never counted, never priced

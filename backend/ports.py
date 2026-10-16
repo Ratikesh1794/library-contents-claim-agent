@@ -27,6 +27,7 @@ class SpineRead:
     author: str | None
     publisher: str | None
     legible: bool
+    is_book: bool = True       # the model's check that the crop really is a book spine (not a bottle, box, DVD...)
 
 
 class Vision(Protocol):

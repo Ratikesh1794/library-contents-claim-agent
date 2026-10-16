@@ -9,9 +9,11 @@ No-guess rules (enforced here and in catalogue.resolve):
 Per-frame results are written to sightings/<frame_id>.json, so the live path can call
 `identify_frame` as keyframes arrive and `run` later only does the frames still missing.
 
-Speed/cost: crops within a frame are read in parallel (crop_workers). When the previous frame is given,
-a book box that tracks onto an already-identified box (backend/stages/track.py, IoU >= reuse_iou) reuses that
-read instead of calling the vision model again ("read once").
+Speed/cost:
+  * "Only analyse what is new" (carry_over): a frame that mostly shows the last analysed frame copies its results.
+  * "Read once": in an analysed frame, a book box that tracks onto an already-identified box reuses that read.
+  * Crops within a frame are read in parallel (crop_workers).
+Not-a-book check: the spine-read call also says whether the crop is a book at all; non-books are dropped.
 
 TO UPGRADE: swap the Vision / Catalogue adapters (backend/deps.py); add rectification with the
 marker homography at the "rectify" comment.
@@ -80,7 +82,8 @@ def _rotations(layout: str | None, bbox, cfg: Config) -> list[int]:
 
 
 def _read_book(crop: np.ndarray, layout, bbox, vision: Vision, catalogue: Catalogue, cfg: Config):
-    """-> (Match|None, rotation, raw_text, legible). Tries rotations, keeps the best accepted."""
+    """-> (Match|None, rotation, raw_text, legible, is_book). Tries rotations, keeps the best accepted.
+    If the model says the crop is not a book at all (bottle, box, DVD...), stop and report is_book=False."""
     tried: list[tuple[cat.Match, int]] = []
     raw, legible = None, False
     for rot in _rotations(layout, bbox, cfg):
@@ -90,6 +93,8 @@ def _read_book(crop: np.ndarray, layout, bbox, vision: Vision, catalogue: Catalo
         except Exception as e:
             log.warning("read failed: %s", e)
             continue
+        if not read.is_book:
+            return None, rot, None, False, False
         if read.legible:
             legible = True
             raw = raw or " | ".join(x for x in (read.title, read.author) if x) or None
@@ -98,13 +103,13 @@ def _read_book(crop: np.ndarray, layout, bbox, vision: Vision, catalogue: Catalo
         if m.candidate and cfg.orient_early_exit:
             break
     if not tried:
-        return None, None, raw, legible
+        return None, None, raw, legible, True
     accepted = [(m, r) for m, r in tried if m.candidate]
     if len({cat.work_key(m.candidate) for m, _ in accepted}) > 1:      # rotations disagree
         m, r = max(tried, key=lambda t: t[0].score)
-        return cat.Match(None, 0.0, "low_confidence", m.candidates), r, raw, legible
+        return cat.Match(None, 0.0, "low_confidence", m.candidates), r, raw, legible, True
     m, r = max(accepted or tried, key=lambda t: t[0].score)
-    return m, r, raw, legible
+    return m, r, raw, legible, True
 
 
 def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
@@ -118,7 +123,7 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
     row_of = {id(d): r for d, r in zip(books, rows)}
     reuse = _reusable(sd, frame, img, prev, cfg)
 
-    def one(i: int, d: Detection) -> Sighting:
+    def one(i: int, d: Detection) -> Sighting | None:
         s = Sighting(id=f"s_{frame.id[2:]}_{i:02d}", frame_id=frame.id, kind=d.kind, bbox=d.bbox,
                      layout=d.layout if d.kind == "book" else None,
                      shelf_hint=f"row{row_of[id(d)] + 1}" if d.kind == "book" else None)
@@ -155,7 +160,10 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
                 elif d.layout == "cover_only":
                     s.reason = "stack_hidden"
                 else:
-                    m, rot, raw, legible = _read_book(crop, d.layout, d.bbox, vision, catalogue, cfg)
+                    m, rot, raw, legible, is_book = _read_book(crop, d.layout, d.bbox, vision, catalogue, cfg)
+                    if not is_book:
+                        log.info("dropped %s: the reader says it is not a book", s.id)
+                        return None                  # not a book: never counted
                     s.raw_text, s.legible, s.rotation_deg = raw, legible, rot
                     if m is not None:
                         s.candidates, s.score = m.candidates[:5], m.score
@@ -167,7 +175,62 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
         return s
 
     with ThreadPoolExecutor(max(1, cfg.crop_workers)) as ex:      # reads in parallel; order is kept
-        return list(ex.map(one, range(len(dets)), dets))
+        return [x for x in ex.map(one, range(len(dets)), dets) if x is not None]
+
+
+def is_carried(sightings: list[Sighting]) -> bool:
+    """True if these sightings were copied from an earlier frame (carry_over) rather than detected here."""
+    return bool(sightings) and all(s.carried_from for s in sightings)
+
+
+def _coverage(H: np.ndarray, anchor_shape, w: int, h: int) -> float:
+    """Fraction of the new frame (w x h) that the anchor frame, projected through H, already covered."""
+    ah, aw = anchor_shape[:2]
+    quad = cv2.perspectiveTransform(np.float32([[[0, 0]], [[aw, 0]], [[aw, ah]], [[0, ah]]]), H).reshape(-1, 2)
+    rect = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+    area, _ = cv2.intersectConvexConvex(quad, rect)
+    return float(area) / (w * h)
+
+
+def carry_over(sd: Path, frame: Frame, anchor: tuple[Frame, list[Sighting]] | None,
+               cfg: Config = CFG) -> list[Sighting] | None:
+    """"Only analyse what is new." If `frame` mostly shows what `anchor` (the last frame that was actually
+    ANALYSED) already showed, return the anchor's sightings moved into this frame, with no model calls.
+    Returns None when the frame must be analysed:
+      * no anchor, or the anchor found nothing (keeps "carried" unambiguous: carried lists are never empty)
+      * the anchor had fixable failures (blur, glare, too far...): the user may be fixing them right now
+      * the frames don't align, or less than novelty_skip_coverage of this frame was already seen
+      * the camera moved closer (things > novelty_max_zoom bigger): more detail may now be readable
+    Always compare with the last ANALYSED frame, never the previous carried one, or a slow pan would drift
+    forever without looking at the books entering the edge of the view.
+    """
+    if anchor is None:
+        return None
+    a_frame, a_sightings = anchor
+    if not a_sightings or any(s.reason in cfg.retry_reasons for s in a_sightings if not s.accepted):
+        return None
+    try:
+        img_a, img_b = store.load_image(sd, a_frame.path), store.load_image(sd, frame.path)
+    except FileNotFoundError:
+        return None
+    H = track.homography(img_a, img_b, cfg)
+    if H is None or float(np.sqrt(abs(np.linalg.det(H[:2, :2])))) > cfg.novelty_max_zoom:
+        return None
+    h, w = img_b.shape[:2]
+    if _coverage(H, img_a.shape, w, h) < cfg.novelty_skip_coverage:
+        return None
+    out: list[Sighting] = []
+    for s in a_sightings:
+        p = track.project(H, s.bbox)
+        c = (max(0, p[0]), max(0, p[1]), min(w, p[2]), min(h, p[3]))
+        if c[2] <= c[0] or c[3] <= c[1] or track.area(c) < 0.5 * track.area(p):
+            continue                                     # mostly out of view now
+        out.append(s.model_copy(update={"id": f"s_{frame.id[2:]}_c{len(out):02d}", "frame_id": frame.id,
+                                        "bbox": c, "carried_from": s.carried_from or s.id}))
+    books = [s for s in out if s.kind == "book"]
+    for s, r in zip(books, assign_rows([b.bbox for b in books])):
+        s.shelf_hint = f"row{r + 1}"
+    return out or None
 
 
 def _reusable(sd: Path, frame: Frame, img: np.ndarray, prev, cfg: Config) -> list[tuple]:
@@ -187,29 +250,35 @@ def _reusable(sd: Path, frame: Frame, img: np.ndarray, prev, cfg: Config) -> lis
 
 def run(sd: Path, vision: Vision | None = None, catalogue: Catalogue | None = None,
         cfg: Config = CFG, deadline: float | None = None) -> None:
+    """Identify every frame that has no sightings yet, in time order, carrying results over from the last
+    analysed frame where the view is already covered (same rule as the live path)."""
     sd = Path(sd)
     vision, catalogue = vision or deps.vision(), catalogue or deps.catalogue()
-    frames = store.read(sd, "frames.json", list[Frame], default=[])
+    frames = sorted(store.read(sd, "frames.json", list[Frame], default=[]), key=lambda f: f.t)
     (sd / "sightings").mkdir(exist_ok=True)
-    todo = [f for f in frames if not (sd / "sightings" / f"{f.id}.json").exists()]
-
-    def work(f: Frame):
+    anchor: tuple[Frame, list[Sighting]] | None = None
+    ok = True
+    for f in frames:
+        path = sd / "sightings" / f"{f.id}.json"
+        if path.exists():                            # done live: just keep track of the last analysed frame
+            done = store.read(sd, f"sightings/{f.id}.json", list[Sighting], default=[])
+            if not is_carried(done):
+                anchor = (f, done)
+            continue
         if deadline and time.time() > deadline:
-            return False
+            ok = False
+            continue
         try:
-            store.write(sd, f"sightings/{f.id}.json", identify_frame(sd, f, vision, catalogue, cfg))
-        except Exception as e:                      # NFR-E5: one bad frame must not kill the stage
+            sightings = carry_over(sd, f, anchor, cfg)
+            if sightings is None:
+                sightings = identify_frame(sd, f, vision, catalogue, cfg, prev=anchor)
+                anchor = (f, sightings)
+            store.write(sd, f"sightings/{f.id}.json", sightings)
+        except Exception as e:                       # NFR-E5: one bad frame must not kill the stage
             log.warning("frame %s failed: %s", f.id, e)
-            return False
-        return True
-
-    with ThreadPoolExecutor(cfg.identify_workers) as ex:
-        ok = list(ex.map(work, todo))
+            ok = False
     all_s: list[Sighting] = []
     for f in frames:
         all_s += store.read(sd, f"sightings/{f.id}.json", list[Sighting], default=[])
     store.write(sd, "sightings.json", all_s)
-    if not all(ok):
-        store.mark_incomplete(sd, "identify")
-    else:
-        store.clear_incomplete(sd, "identify")
+    (store.clear_incomplete if ok else store.mark_incomplete)(sd, "identify")

@@ -112,7 +112,7 @@ def _link_pairs(frame_a: list[Sighting], frame_b: list[Sighting], h: np.ndarray,
 def _make(oid: str, kind: Literal["book", "item"], group: list[Sighting], frames: dict[str, Frame],
           row_pos: dict[str, tuple[str, int]]) -> Object:
     accepted = [s for s in group if s.accepted]
-    b = max(accepted or group, key=lambda s: (s.score or 0.0, s.crop_blur or 0.0))
+    b = max(accepted or group, key=lambda s: (s.carried_from is None, s.score or 0.0, s.crop_blur or 0.0))
     shelf, pos = row_pos.get(b.id, (None, None))
     reasons: list[Reason] = [s.reason for s in group if s.reason is not None]
     o = Object(id=oid, kind=kind, sighting_ids=[s.id for s in group],

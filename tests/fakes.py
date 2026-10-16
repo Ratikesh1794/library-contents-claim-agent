@@ -10,9 +10,11 @@ from backend.schemas import Candidate, Frame, ItemGuess
 
 class FakeVision:
     def __init__(self, dets=None, reads=None, item=None):
-        self.dets, self.reads, self.item, self.read_calls = dets or [], list(reads or []), item, 0
+        self.dets, self.reads, self.item, self.read_calls, self.detect_calls = dets or [], list(reads or []), item, 0, 0
 
-    def detect(self, img): return self.dets
+    def detect(self, img):
+        self.detect_calls += 1
+        return self.dets
     def describe_item(self, crop): return self.item or ItemGuess(category="lamp", material="metal")
 
     def read_spine(self, crop):
