@@ -30,7 +30,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend import deps, pipeline
 from backend.core import store
-from backend.live import agent
+from backend.live import agent, voice_pipecat
 from backend.stages import dedupe, identify, track
 from backend.live.coach import Coach
 from backend.config import CFG, ROOT, Config
@@ -102,8 +102,11 @@ class Hooks:
 
 
 def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalogue=None, pipeline_deps=None,
-               banner: bool = False, voice=agent) -> FastAPI:
-    """`voice` = module/object with start_call, run, hangup (backend.agent); tests inject a fake."""
+               banner: bool = False, voice=None) -> FastAPI:
+    """`voice` = module/object with start_call, run, hangup. Default from VOICE_ENGINE: backend.live.voice_pipecat
+    ("pipecat") or backend.live.agent ("direct"). Tests inject a fake."""
+    if voice is None:
+        voice = agent if cfg.voice_engine == "direct" else voice_pipecat
     @asynccontextmanager
     async def lifespan(app):
         if banner:
@@ -270,7 +273,8 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
             raise HTTPException(502, f"Could not start the voice call: {e}")
         s.call_id = call_id
         s.voice_task = asyncio.create_task(voice.run(s, call_id, cfg))
-        return Response(answer, media_type="application/sdp")
+        engine = "direct" if voice is agent else "pipecat" if voice is voice_pipecat else "custom"
+        return Response(answer, media_type="application/sdp", headers={"X-Voice-Engine": engine})
 
     @app.post("/api/sweeps/{sweep_id}/finish", dependencies=[Depends(require_token)])
     async def finish_route(sweep_id: str):

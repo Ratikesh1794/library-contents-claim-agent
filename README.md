@@ -15,7 +15,7 @@ Needs Python 3.12 and an OpenAI API key.
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements.txt
 source .venv/bin/activate
-pytest                     # 71 offline tests; every external service is faked
+pytest                     # 76 offline tests; every external service is faked
 cp .env.example .env       # then fill in OPENAI_API_KEY (see "Configuration" below)
 ```
 
@@ -53,7 +53,9 @@ python -m backend.eval sweeps/<id> ground_truth/                 # pass-bar tabl
 |---|---|---|
 | `OPENAI_API_KEY` | yes | Vision (finding and reading books) and the voice agent |
 | `VISION_MODEL`, `LIVE_MODEL`, `TRANSCRIBE_MODEL`, `VOICE` | no | Defaults are the mini models `gpt-4.1-mini`, `gpt-realtime-mini`, `gpt-4o-mini-transcribe`; set `gpt-4.1` / `gpt-realtime` for full size |
-| `NOISE_REDUCTION`, `VAD_THRESHOLD` | no | Voice in noisy rooms: `far_field`/`near_field`/`off`, and 0..1 (higher ignores more noise) |
+| `VOICE_ENGINE` | no | `pipecat` (default: the laptop filters noise and decides turns; phone on the **same Wi-Fi**) or `direct` (phone straight to OpenAI; works on any network) |
+| `VAD_MIN_VOLUME`, `NOISE_FILTER` | no | Pipecat engine: loudness needed to count as speech (default 0.72; raise if a TV still triggers it) and `rnnoise`/`off` |
+| `NOISE_REDUCTION`, `VAD_THRESHOLD` | no | OpenAI-side noise reduction `far_field`/`near_field`/`off`; `VAD_THRESHOLD` is for the direct engine |
 | `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET` | for prices | Without them every price is blank (honest blank, listed in the review queue) |
 | `GOOGLE_BOOKS_API_KEY` | no | Raises the catalogue quota |
 | `MARKER_SIDE_CM` | for dimensions | Side of the printed ArUco marker, measured with a ruler. Unset means book and room dimensions stay blank |
@@ -78,7 +80,8 @@ backend/
                        quality -> identify (+ catalogue) -> track + dedupe -> measure_scale -> measure_books
                        | measure_room | price -> assemble -> report
   live/              app.py   FastAPI: phone app, API, /ws/live, /voice signalling, token auth
-                     agent.py voice agent (OpenAI Realtime over WebRTC, server attached sideband)
+                     voice_pipecat.py  voice engine "pipecat": RNNoise + volume-gated Silero VAD + OpenAI Realtime
+                     agent.py voice engine "direct" (phone -> OpenAI over WebRTC, server sideband) + shared tools
                      coach.py capture-issue state machine
   adapters/          one file per external service: openai_vision, open_library, google_books, ebay,
                      frankfurter, null_reconstructor
@@ -100,9 +103,10 @@ Stages never call each other. They read and write files in the sweep folder, so 
    quality gate → read the spine and check it really is a book → match a real catalogue record), reusing reads for
    books already identified.
 2. Overlapping frames are aligned (`stages/track.py`), so one physical book counts once whether or not it was read.
-3. The **voice agent** runs over WebRTC directly between the phone and OpenAI. The server creates the call
-   (the API key stays on the laptop), listens alongside it to run tools (skip a shelf, "that one is signed",
-   finish), injects capture tips from the Coach, and streams live captions to the phone.
+3. The **voice agent** (default engine: Pipecat) runs over WebRTC between the phone and the laptop on the same Wi-Fi.
+   The laptop removes steady noise (RNNoise), counts only speech loud enough to come from the person holding the
+   phone (Silero VAD volume gate, so a TV across the room is ignored), and talks to OpenAI Realtime. Tools (skip a
+   shelf, "that one is signed", finish), Coach tips and live captions work the same with either engine.
 4. On finish: dedupe → measure ∥ price → assemble → report; the agent reads a templated summary.
 
 ## How to change a part
@@ -142,7 +146,8 @@ against real OpenAI.
 
 **Known issues**
 - Non-books are rejected by a check in the spine-read call (verified on a small real sample); detector boxes can still be loose.
-- Background voices (TV, other people) still trigger the agent in hands-free mode; use hold-to-talk there.
+- Background voices: the Pipecat engine's volume gate ignored a TV ~20 dB quieter than the user in testing; a loud TV near the phone can still pass (raise `VAD_MIN_VOLUME`, or use hold-to-talk). Soft first words can be clipped by the gate.
+- The Pipecat engine needs the phone on the same Wi-Fi as the laptop (or a TURN server in `ICE_SERVERS`); `VOICE_ENGINE=direct` works anywhere.
 - Without eBay keys every price is blank.
 - Item counts after tracking have not yet been checked on a sweep captured with the new camera path.
 

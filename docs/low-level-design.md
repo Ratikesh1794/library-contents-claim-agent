@@ -105,6 +105,11 @@ Flow:
 
 `/ws/live` is down-only: `inventory`, `coach`, `status`, `transcript`, `agent_state`, `packet_ready`.
 
+**Voice engines** (`VOICE_ENGINE`, same `start_call / run / hangup` interface, same tools via `agent.execute_tool`):
+- `pipecat` (default, `backend/live/voice_pipecat.py`): the phone's WebRTC goes to the laptop (Pipecat `SmallWebRTCTransport`, same Wi-Fi; ngrok carries only the page and signalling). Pipeline: RNNoise filter → user aggregator with Silero VAD (`VADParams(confidence 0.7, start_secs 0.3, stop_secs 0.5, min_volume 0.72)`) → OpenAI Realtime with server turn detection **off** (`turn_detection=False`, `far_field` noise reduction kept) → transport out. A Pipecat observer maps frames to the same UI messages. Measured on Pipecat's volume scale: user near the phone 0.84–0.91 (0.78 at half volume), a TV ~22 dB quieter 0.64–0.67; at the default gate 0.6 the TV was transcribed as the user, at 0.72 it was ignored while the user was still heard. A harmless realtime "truncate" error after interruptions is logged, not shown.
+- `direct` (`backend/live/agent.py`): the original path above (phone ↔ OpenAI, server sideband). Works on any network, but background voices trigger it.
+- Spoken shelf references are normalised to Coach regions ("shelf2", "second shelf", "top shelf" → `row2` / `row1`).
+
 ### 3.3 Agent contract
 
 Prompts live in `backend/prompts/` (Python constants): `agent.py: SYSTEM` (rules + `$country`/`$currency`), `coach.py: ASKS` (what to say per capture reason), `vision.py` (vision prompts).
@@ -428,6 +433,6 @@ Not built yet:
 
 Known issues:
 - Non-books: the read-time `is_book` check rejects them (verified on a small real sample); the detector still draws loose boxes that can mix an object and a book.
-- Background **voices** (TV, people) still trigger the agent in hands-free mode; noise reduction and the VAD threshold only remove hiss and hum. Use hold-to-talk in those rooms.
+- Background voices: fixed for distant sources by the Pipecat engine's volume gate (verified with a scripted WebRTC client: TV ~20 dB below the user ignored); a loud TV near the phone can still pass, and soft first words can be clipped. Not true voice isolation (Krisp VIVA / ai-coustics are commercial options in Pipecat).
 - Item counts after tracking are unverified on a sweep captured with the new camera path.
 

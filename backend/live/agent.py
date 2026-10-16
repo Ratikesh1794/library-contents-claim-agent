@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 
 from backend.config import CFG
 from backend.prompts import agent as prompts, fill
@@ -39,6 +40,41 @@ TOOLS = [
         region="region id, e.g. row2", action="skip or include"),
     _fn("finish_sweep", "Call when the user says they are done walking the room."),
 ]
+
+
+_ORDINALS = {"first": 1, "top": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7, "eighth": 8}
+
+
+def normalize_region(text: str) -> str:
+    """Spoken shelf references -> the Coach's region ids: 'shelf2', 'second shelf', 'shelf row 2', 'top shelf' -> 'row2'.
+    Anything else is kept as said."""
+    t = text.strip().lower()
+    num = re.search(r"\d+", t)
+    if num:
+        return f"row{int(num.group())}"
+    word = next((n for w, n in _ORDINALS.items() if re.search(rf"\b{w}\b", t)), None)
+    return f"row{word}" if word else text.strip()
+
+
+def execute_tool(hooks, name: str, a: dict) -> dict:
+    """What every voice tool does to the app (shared by both voice engines). Writes USER FACTS only.
+    Half-filled calls (seen with background chatter) are rejected so the model asks instead of guessing."""
+    missing = [k for k in {"record_user_fact": ("fact",), "mark_region": ("region", "action")}.get(name, ())
+               if not str(a.get(k) or "").strip()]
+    if missing:
+        return {"ok": False, "error": f"missing {', '.join(missing)}; ask the user which one they mean"}
+    if name == "record_user_fact":
+        hint = a.get("target_hint")
+        if hint and re.search(r"\b(shelf|row)\b", hint.lower()):   # "second shelf" -> "row2"; titles stay as said
+            hint = normalize_region(hint)
+        hooks.on_fact(hint, a["fact"], None)
+    elif name == "mark_region":
+        hooks.on_skip(normalize_region(a["region"]), a["action"].strip().lower())
+    elif name == "finish_sweep":
+        asyncio.create_task(hooks.on_finish())
+    else:
+        return {"ok": False, "error": "unknown tool"}
+    return {"ok": True}
 
 
 def instructions(meta: dict) -> str:
@@ -148,21 +184,7 @@ class RealtimeAgent:
             a = json.loads(arguments or "{}")
         except json.JSONDecodeError:
             a = {}
-        h = self.s.hooks
-        # Reject half-filled calls (seen with background chatter) so the model asks the user instead of guessing.
-        missing = [k for k in {"record_user_fact": ("fact",), "mark_region": ("region", "action")}.get(name, ())
-                   if not str(a.get(k) or "").strip()]
-        if missing:
-            return json.dumps({"ok": False, "error": f"missing {', '.join(missing)}; ask the user which one they mean"})
-        if name == "record_user_fact":
-            h.on_fact(a.get("target_hint"), a["fact"], None)
-        elif name == "mark_region":
-            h.on_skip(a["region"], a["action"])
-        elif name == "finish_sweep":
-            asyncio.create_task(h.on_finish())
-        else:
-            return json.dumps({"ok": False, "error": "unknown tool"})
-        return json.dumps({"ok": True})
+        return json.dumps(execute_tool(self.s.hooks, name, a))
 
     async def _pump_inject(self, conn) -> None:
         """App-state messages, marked as such so they are not mistaken for the user speaking."""

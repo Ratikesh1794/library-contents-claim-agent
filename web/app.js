@@ -206,8 +206,9 @@ async function startVoice() {
   const me = (pc = new RTCPeerConnection());
   me.ontrack = (e) => { agentAudio.srcObject = e.streams[0]; ensureSoundOn(); };
   me.addTrack(micTrack(), stream);
-  const dc = me.createDataChannel("oai-events");
-  dc.onopen = () => { if (!greeted) { greeted = true; dc.send(JSON.stringify({ type: "response.create" })); } };   // the greeting
+  const dc = me.createDataChannel("oai-events");     // direct engine: used to trigger the greeting (pipecat greets server-side)
+  let engine = "pipecat";
+  dc.onopen = () => { if (engine === "direct" && !greeted) { greeted = true; dc.send(JSON.stringify({ type: "response.create" })); } };
   me.onconnectionstatechange = () => {
     if (me !== pc) return;
     const st = me.connectionState;
@@ -218,7 +219,9 @@ async function startVoice() {
   await me.setLocalDescription(await me.createOffer());
   const r = await api(`/api/sweeps/${sweepId}/voice`, { method: "POST", body: me.localDescription.sdp, headers: { "Content-Type": "application/sdp" } });
   if (!r.ok) { const e = new Error((await r.json().catch(() => ({}))).detail || "server said " + r.status); e.fatal = r.status === 503; throw e; }
+  engine = r.headers.get("X-Voice-Engine") || "pipecat";
   await me.setRemoteDescription({ type: "answer", sdp: await r.text() });
+  if (engine === "direct" && dc.readyState === "open" && !greeted) { greeted = true; dc.send(JSON.stringify({ type: "response.create" })); }
 }
 function retryVoice(why) {
   if (voiceRetry >= 5) { setPill("Voice unavailable", "bad"); addSystemLine(why + ". Stopped retrying; capture still works."); return; }

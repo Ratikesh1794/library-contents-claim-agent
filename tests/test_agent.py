@@ -164,3 +164,14 @@ def test_half_filled_tool_calls_are_rejected_not_recorded(tmp_path):
     assert '"ok": false' in a._run_tool("record_user_fact", '{"target_hint": "b_001"}')
     assert s.hooks.skips == [] and s.hooks.facts == []
     assert '"ok": true' in a._run_tool("mark_region", '{"region": "row2", "action": "skip"}') and s.hooks.skips == [("row2", "skip")]
+
+
+def test_spoken_shelf_names_map_to_coach_rows(tmp_path):
+    for said in ("shelf2", "second shelf", "shelf row 2", "Row 2"):
+        assert agent.normalize_region(said) == "row2"
+    assert agent.normalize_region("top shelf") == "row1" and agent.normalize_region("by the window") == "by the window"
+    s, a, _ = make(tmp_path)
+    a._run_tool("mark_region", '{"region": "shelf2", "action": "Skip"}')
+    a._run_tool("record_user_fact", '{"target_hint": "second shelf", "fact": "all signed"}')
+    a._run_tool("record_user_fact", '{"target_hint": "Dune", "fact": "first edition"}')
+    assert s.hooks.skips == [("row2", "skip")] and s.hooks.facts == [("row2", "all signed"), ("Dune", "first edition")]

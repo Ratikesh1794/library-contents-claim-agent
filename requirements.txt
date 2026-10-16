@@ -9,3 +9,4 @@ openai
 python-dotenv
 pytest
 qrcode
+pipecat-ai[openai,webrtc,silero,rnnoise]

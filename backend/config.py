@@ -32,6 +32,17 @@ class Config:
     live_model: str = os.environ.get("LIVE_MODEL", "gpt-realtime-mini")   # OpenAI Realtime model
     transcribe_model: str = os.environ.get("TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
     voice: str = os.environ.get("VOICE", "alloy")
+    # Voice engine: "pipecat" (default; laptop filters the audio and decides turns, backend/live/voice_pipecat.py;
+    # needs the phone on the same Wi-Fi) or "direct" (phone straight to OpenAI over WebRTC, backend/live/agent.py).
+    voice_engine: str = os.environ.get("VOICE_ENGINE", "pipecat")
+    noise_filter: str = os.environ.get("NOISE_FILTER", "rnnoise")          # pipecat engine: rnnoise | off
+    # pipecat engine: loudness (Pipecat's 0..1 scale, compressed) needed to count as speech. Measured: user near the phone
+    # 0.84-0.91 (0.78 at half volume); a TV ~22 dB quieter 0.64-0.67. 0.72 sits between; raise if a TV still triggers it.
+    vad_min_volume: float = float(os.environ.get("VAD_MIN_VOLUME", "0.72"))
+    vad_confidence: float = 0.7          # Silero: how sure it must be that the sound is speech
+    vad_start_secs: float = 0.3          # speech must last this long before it counts (coughs, bangs don't interrupt)
+    vad_stop_secs: float = 0.5           # silence that ends the user's turn
+    ice_servers: tuple[str, ...] = tuple(s.strip() for s in os.environ.get("ICE_SERVERS", "stun:stun.l.google.com:19302").split(",") if s.strip())
     # Voice input in noisy rooms (see agent.session_config). far_field = phone held away from the mouth.
     noise_reduction: str = os.environ.get("NOISE_REDUCTION", "far_field")   # far_field | near_field | off
     vad_threshold: float = float(os.environ.get("VAD_THRESHOLD", "0.7"))    # 0..1; higher = ignores more background noise
