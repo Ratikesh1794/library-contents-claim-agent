@@ -122,11 +122,11 @@ IDs are referenced by tests and the results sheet.
 
 | # | Decision | Why |
 |---|---|---|
-| D1 | **Two media paths.** Voice goes phone ↔ OpenAI Realtime over WebRTC (the server only signals and attaches sideband); high-res keyframes go to the server for reading and measuring. The voice model does not see the camera. | A live model at ~1 fps low res can't read spines anyway; facts come from the pipeline, and capture problems reach the agent as text (D10). |
+| D1 | **Two media paths.** Voice goes over WebRTC (default: phone ↔ laptop, which cleans the audio and talks to OpenAI Realtime; D18); high-res keyframes go to the server for reading and measuring. The voice model does not see the camera. | A live model at ~1 fps low res can't read spines anyway; facts come from the pipeline, and capture problems reach the agent as text (D10). |
 | D2 | **Live agent talks; it does not produce facts.** It calls tools; the pipeline writes the inventory. | Keeps hallucination out of the record. Same split the reference uses (LLM extracts, code decides). |
 | D3 | **Metric scale from a printed ArUco marker** on/near the shelf, cross-checked against standard book formats. | Brief accepts a reference object. Deterministic, explainable line by line. |
 | D4 | **Room geometry from multi-view reconstruction, scaled by the marker.** Fallback: WebXR AR hit-testing or LiDAR capture. | No LiDAR assumption on user's phone. Go/no-go decided in the first spike. |
-| D5 | **Catalogue-grounded identification.** Vision model reads spine text; Open Library / Google Books resolves it; fuzzy score below threshold means `unidentified`. | A title not found in a catalogue cannot be "confidently" asserted. |
+| D5 | **Strict, catalogue-grounded identification.** The vision model reads spine text; a book is identified only when the title **and** the author read from the spine both match the same Open Library / Google Books record, and no other matching record is a different book. Edition/year only if the spine's publisher also matches; ISBN only for a verified single-edition record. Everything else stays `None`. | A title the spine and a catalogue don't both confirm cannot be asserted. A plausible guess is the worst outcome (NFR-I3). |
 | D6 | **Prices only from retrieved listings** (shopping search, eBay API), FX from a rates API. LLM may pick *which listing matches a book*, never a number. | Meets NFR-I1. |
 | D7 | **Plain Python orchestration**, not an agent framework, for the post-sweep pipeline. | Easier to test, time, and explain. |
 | D8 | **Sweep stored as a directory of JSON + frames.** | Enables re-runs, eval, and traceability with no database. |
@@ -135,22 +135,25 @@ IDs are referenced by tests and the results sheet.
 | D11 | **Give-up rule:** max 2 asks per region, then `unidentified` with a reason. | No-guess guarantee; keeps the sweep moving. |
 | D12 | **No AR/LiDAR dependency.** Any phone browser camera; marker for scale; reconstruction from RGB. LiDAR/WebXR only as optional upgrade. | Works on cheap phones; laptop webcam is a last resort. |
 | D13 | **Take perception and lookup from open/hosted components; build only glue and honesty rules.** | See section 5.1. |
-| D15 | **Voice over WebRTC, server sideband.** The phone sends its WebRTC offer to our server, which creates the OpenAI call (key stays on the laptop) and attaches to the same call to run tools and stream captions. | Raw audio over our WebSocket bypassed the browser's echo cancellation and noise suppression: the agent heard itself and the room. WebRTC also works on any network, mobile data included. |
+| D15 | **Voice over WebRTC, never raw audio over our WebSocket.** The phone always sends a WebRTC offer to our server (`/voice`); the API key stays on the laptop. | Raw audio over our WebSocket bypassed the browser's echo cancellation and noise suppression: the agent heard itself and the room. |
 | D16 | **Dedupe by frame-to-frame tracking** (homography between overlapping keyframes). | Linking by identified neighbours fails when few books are identified (a real sweep turned 97 sightings into 97 books). |
 | D17 | **Prompts are code constants in one package** (`backend/prompts/`); **mini models by default.** | One place to change what any model is told; lower cost per sweep. |
+| D18 | **Two voice engines behind one interface** (`VOICE_ENGINE`). Default `pipecat`: phone → laptop over WebRTC (same Wi-Fi), RNNoise, then a Silero VAD with a **volume gate** decides when the user speaks; OpenAI's own turn detection is off. Fallback `direct`: phone ↔ OpenAI Realtime, server attached sideband. | Background voices (a TV) made OpenAI's turn detection start turns and cut the agent off. The person holding the phone is much louder than a TV across the room: measured, a gate at 0.72 ignored a TV ~20 dB quieter while still hearing the user. `direct` stays for networks where the phone can't reach the laptop. |
+| D19 | **Analyse only what is new.** A keyframe that mostly shows the last analysed frame copies its results; the live worker always works on the newest frame; the spine-read call also says whether a crop is a book at all. | Cost and latency scale with model calls, not frames; a stale queue made coach tips lag; non-books (perfume boxes) were being counted as books. |
 | D14 | **Phone is the capture device; the laptop runs the server.** The phone opens the web app in its browser over HTTPS (tunnel or local HTTPS). Laptop webcam is not the primary camera. | Walking a room needs a handheld rear camera; browsers allow camera/mic only on HTTPS, so access topology is part of the design. |
 
 ### 5.1 Build vs take
 
 | Problem | Take (free / open / hosted) | We build |
 |---|---|---|
-| Live voice | OpenAI Realtime (`gpt-realtime-mini`) over WebRTC; browser echo cancellation / noise suppression | Signalling endpoint, sideband controller, prompt, tools, coaching messages |
+| Live voice | OpenAI Realtime (`gpt-realtime-mini`); Pipecat (SmallWebRTC transport, RNNoise, Silero VAD); browser WebRTC echo cancellation | Engine switch, volume-gate tuning, UI bridge (captions/state), tools, coaching messages |
 | Blur / glare / brightness | OpenCV | Thresholds, per-region aggregation |
 | Find and read spines | Vision LLM on upscaled crops; optional detector/segmenter (YOLO, Grounding DINO, SAM2) | Segment → orient → read flow, structured output, reason codes |
-| Title to real book | Open Library, Google Books APIs | Fuzzy match + accept/reject threshold |
+| Title to real book | Open Library, Google Books APIs | Strict title + author verification, ambiguity check, field-level edition/ISBN rules |
 | Metric scale | OpenCV ArUco | px to cm per shelf plane, cross-checks |
 | Room dimensions | RGB reconstruction model (e.g. VGGT, COLMAP); optional monocular metric depth as a cross-check | Plane fitting, scaling with marker, area math, fallbacks |
 | Prices | eBay Browse API, shopping search API, Frankfurter FX | Listing-to-book matching, source/URL/date logging, `converted` flag, appraisal rules |
+| Same object across frames | OpenCV ORB + RANSAC homography | Tracking, carry-over of already-seen views, dedupe rules |
 | Dedupe, totals, review queue, report, eval | Nothing | All ours; this is the graded core |
 
 We do not train models, write OCR, or write 3D reconstruction. Model licences (some reconstruction weights are non-commercial) are noted in the README.
@@ -170,27 +173,29 @@ Rule: below the readable-pixel threshold the system does not infer. It marks `un
 ### 6.1 Component view
 
 ```
-┌──────────────────────── PHONE BROWSER ─────────────────────────┐
-│  Mic ─────────────► WebRTC audio ◄──────────────────────────────┼───────────► OpenAI Realtime
-│  Speaker ◄──────── (echo cancel + noise suppression) ───────────┼──── voice ◄──  (gpt-realtime-mini)
-│  Camera ─┬─► quality check (320 px) ─► keyframes hi-res (video frames) ──► POST /api/sweeps/<id>/frames
-│          └─► preview                                            │                     ▲
-│  Transcript + inventory panel ◄── /ws/live (down only) ◄────────┼──┐                  │ sideband (same call)
-└─────────────────────────────────────────────────────────────────┘  │                  │
-                         │ HTTPS/WSS (tunnel)                        │                  │
-┌────────────────────────▼────────────────────────── BACKEND (FastAPI) ─────────────────┴────────┐
-│  /voice: WebRTC signalling (creates the call; API key stays here)                               │
-│  Voice agent (sideband): tools record_user_fact, mark_region, finish_sweep; captions + state ──┘│
-│  Coach: reason codes -> CAPTURE_ISSUE text for the agent                                        │
-│  Sweep Store (disk):  sweeps/<id>/ frames/ frames.json sightings/ links.json user_facts.json …  │
-│                                                                                                 │
-│  Pipeline (each stage: JSON in → JSON out)                                                      │
-│   ┌──────────┐  ┌─────────────┐  ┌─────────┐  ┌────────┐  ┌──────────┐                          │
-│   │ IDENTIFY │─►│ TRACK +     │─►│ MEASURE │─►│ PRICE  │─►│ ASSEMBLE │─► packet + report        │
-│   │ spines + │  │ DEDUPE      │  │ scale + │  │ sourced│  │ totals + │                          │
-│   │ items    │  │             │  │ room 3D │  │ only   │  │ review q │                          │
-│   └────┬─────┘  └─────────────┘  └────┬────┘  └───┬────┘  └──────────┘                          │
-└────────┼──────────────────────────────┼───────────┼─────────────────────────────────────────────┘
+┌──────────────────────── PHONE BROWSER ──────────────────────────┐
+│  Mic / speaker ◄──── WebRTC voice (echo cancellation) ───────────┼──┐  default engine: to the laptop (same Wi-Fi)
+│  Camera ─┬─► quality check (320 px) ─► keyframes (video frames) ──┼──┼─► POST /api/sweeps/<id>/frames
+│          └─► preview                                             │  │
+│  Transcript + inventory panel ◄── /ws/live (down only) ◄──────────┼──┼──┐
+└──────────────────────────────────────────────────────────────────┘  │  │
+                         │ HTTPS/WSS (tunnel: page, API, signalling)    │  │
+┌────────────────────────▼──────────────────────── BACKEND (FastAPI) ───▼──┴─────────────────────────┐
+│  /voice: WebRTC signalling (API key stays here)                                                    │
+│  Voice engine "pipecat":  RNNoise ─► Silero VAD + volume gate ─► OpenAI Realtime (turns decided here)│
+│     (engine "direct": phone ↔ OpenAI Realtime, server attached sideband)                           │
+│  Tools record_user_fact, mark_region, finish_sweep; captions + agent state ─► /ws/live            │
+│  Coach: reason codes -> CAPTURE_ISSUE text for the agent                                           │
+│  Sweep Store (disk):  sweeps/<id>/ frames/ frames.json sightings/ links.json user_facts.json …     │
+│                                                                                                    │
+│  Live worker: newest frame ─► already seen? carry results over : IDENTIFY                          │
+│  Pipeline (each stage: JSON in → JSON out)                                                         │
+│   ┌──────────┐  ┌─────────────┐  ┌─────────┐  ┌────────┐  ┌──────────┐                             │
+│   │ IDENTIFY │─►│ TRACK +     │─►│ MEASURE │─►│ PRICE  │─►│ ASSEMBLE │─► packet + report           │
+│   │ spines + │  │ DEDUPE      │  │ scale + │  │ sourced│  │ totals + │                             │
+│   │ items    │  │             │  │ room 3D │  │ only   │  │ review q │                             │
+│   └────┬─────┘  └─────────────┘  └────┬────┘  └───┬────┘  └──────────┘                             │
+└────────┼──────────────────────────────┼───────────┼────────────────────────────────────────────────┘
          ▼                              ▼           ▼
    OpenAI vision (gpt-4.1-mini)   ArUco (OpenCV)   eBay Browse, FX rates
    Open Library / Google Books    3D reconstruction (not built yet)
@@ -201,7 +206,7 @@ Rule: below the readable-pixel threshold the system does not infer. It marks `un
 | Component | Responsibility | Never does |
 |---|---|---|
 | Browser quality checker | Blur, glare, brightness scores per frame; "which shelf" hint from motion | Identify content |
-| Live server + voice signalling | Create the WebRTC call, attach sideband, run tools, push captions / agent state / inventory to the UI | Carry voice audio; write inventory facts itself |
+| Live server + voice engine | WebRTC signalling; filter and gate the user's audio (pipecat) or attach sideband (direct); run tools; push captions / agent state / inventory to the UI | Write inventory facts itself; send the API key to the phone |
 | Live voice agent | Converse, coach, ask questions, relay user corrections via tools | State prices, titles, or dimensions as fact |
 | Identify | Per keyframe: segment each book, classify orientation, rotate/upscale crop, read text, catalogue match + score; non-book classification; emit reason code on failure | Guess below threshold |
 | Coach | Per-region state (`ask_count`, `resolved`); turns reason codes into one rate-limited `CAPTURE_ISSUE` message; closes region after 2 asks | Read, name, or judge content |
@@ -278,7 +283,7 @@ ReviewRef { ref_id, reason }
 ```
 
 Status rules (code, not model):
-- `identified` if catalogue match score ≥ T and spine text agrees
+- `identified` only if the title **and** author read from the spine both match one catalogue record and no other matching record is a different book; edition/year/ISBN only when verified (D5)
 - `unidentified` otherwise (dims still recorded)
 - `needs_appraisal` if signed/rare flag, art without print confirmation, or estimated value > threshold
 
@@ -286,12 +291,13 @@ Status rules (code, not model):
 
 ```
 keyframe (hi-res)
+ → already seen? (≥85% of it was in the last analysed frame, not closer, no fixable failures) => copy results
  → segment: one region per book (box/mask); non-book objects separate
  → classify layout: upright | rotated | flat | stacked | cover_only
  → crop + rectify (marker homography when available) + upscale
  → orient: try 2 rotations for tall boxes (4 for unknown); keep best catalogue score
- → read: vision model returns {title, author, publisher} JSON from the crop only
- → match: Open Library / Google Books; accept if score ≥ T, else unidentified
+ → read: vision model returns {is_book, title, author, publisher} JSON from the crop only; is_book=false => dropped
+ → match: Open Library / Google Books; identified only if title AND author match one record, else unidentified
  → output: Sighting{status, reason?, candidates[], score}
 ```
 
@@ -341,22 +347,25 @@ Fallbacks, in order: marker-scaled plane fit from single-view homography on floo
  Phone (browser)                         Laptop
  ┌──────────────────┐   HTTPS / WSS    ┌──────────────────────────────┐
  │ rear camera, mic │ ◄──────────────► │ FastAPI: web app, /ws/live,  │
- │ web app + panel  │  via tunnel or   │ frames API, pipeline, caches │
- └──────────────────┘  local HTTPS     │ API keys (never sent to phone)│
-                                       └──────────────┬───────────────┘
-                                                      ▼  OpenAI (vision; Realtime call setup + sideband), catalogue, price APIs
- Phone ◄──── WebRTC voice ────► OpenAI Realtime (direct; audio never passes through the laptop)
+ │ web app + panel  │  via tunnel or   │ frames API, /voice, pipeline │
+ └────────┬─────────┘  local HTTPS     │ API keys (never sent to phone)│
+          │                            └──────────────┬───────────────┘
+          │  WebRTC voice, same Wi-Fi (engine pipecat) │
+          └──────────────────────────────────────────►┤
+                                                      ▼  OpenAI (vision; Realtime voice), catalogue, price APIs
+ (engine direct: phone ◄── WebRTC voice ──► OpenAI Realtime; the laptop only signals and attaches sideband)
 ```
 
 | Aspect | Decision |
 |---|---|
 | Serving | Laptop serves the static web app and API on one origin, so no CORS and one WSS endpoint. |
 | HTTPS | Required for camera/mic on the phone. Default: ngrok on a fixed domain (`NGROK_DOMAIN`, same link and QR every run), else a quick tunnel (cloudflared or ngrok). Alternative on same Wi-Fi: `mkcert` local HTTPS (lower latency, CA must be trusted on the phone). |
-| Access control | Random per-sweep token in the URL; server rejects WS/API calls without it. No user accounts (out of scope). |
+| Voice network | Engine `pipecat`: the phone's WebRTC audio must reach the laptop directly (same Wi-Fi; a tunnel carries only the page and signalling). Other networks need a TURN relay (`ICE_SERVERS`) or `VOICE_ENGINE=direct`. |
+| Access control | Sweep token in the URL (fixed via `SWEEP_TOKEN`); server rejects WS/API calls without it. Per-sweep rate limits (HTTP 429): frames 5/s, voice offers 6/min, finish 3/min, new sweeps 10/min. No user accounts (out of scope). |
 | Secrets | API keys stay in laptop `.env`; the phone only receives the page and media endpoints. |
-| Bandwidth | ~2 hi-res keyframes/s ≈ 1 to 2 MB/s upstream. Browser adapts JPEG quality/fps if the upload queue grows. |
-| Keep-alive | Screen Wake Lock on the phone; foreground tab required; reconnect with transcript seed if the socket drops. |
-| Privacy | With a tunnel, media transits the tunnel provider; use local HTTPS for sensitive spaces. Documented in README. |
+| Bandwidth | ~1.4 keyframes/s at ≤ 2560 px, ~1 MB each. Browser lowers JPEG quality/rate if the upload queue grows. |
+| Keep-alive | Screen Wake Lock on the phone; foreground tab required; voice reconnects up to 5 times; capture continues without voice. |
+| Privacy | With a tunnel, keyframes transit the tunnel provider. Voice: engine `pipecat` keeps it on the local network until the laptop forwards it to OpenAI; engine `direct` sends it from the phone to OpenAI. |
 | Reference change | Remove its localhost-only middleware and origin checks; replace with token + allowed-origin config. |
 
 ## 7. Failure and degradation matrix
@@ -366,15 +375,19 @@ Fallbacks, in order: marker-scaled plane fit from single-view homography on floo
 | Marker not visible on a shelf | Fall back to standard-format heuristic; lower confidence; add to review queue |
 | 3D reconstruction fails or is implausible | Room dims from marker-scaled plane fits; flag low confidence; review queue |
 | Catalogue API down / no match | `unidentified`, never a guessed title |
+| Spine shows a title but no author | `unidentified` (`author_not_visible`), no catalogue call; counted and measured |
+| Two catalogue records match but are different books | `unidentified` (`ambiguous_match`) |
+| Non-book detected as a book (perfume box, DVD…) | Spine-read check says `is_book=false`; the box is dropped, never counted or priced |
 | Price source down / no listing | blank price, counted in `excluded_from_totals` |
-| Live model session drops | Phone re-establishes the WebRTC call; sideband re-attaches; frames already saved so pipeline unaffected |
+| Live model session drops | Phone re-establishes the WebRTC call; frames already saved so pipeline unaffected |
 | Pipeline exceeds 3 min budget | Stages emit partial results; packet built with what exists; unfinished lines go to review queue |
 | Low-res camera / spine too small | `unidentified` + `too_far`/`blur`; dims kept; honest count in results |
 | Region still failing after 2 asks | Closed as `unidentified`, reason in review queue |
 | Spine not facing camera (stacked) | Counted, dims recorded, `stack_hidden`, no ask |
 | Phone upload stalls (weak Wi-Fi / tunnel) | Browser lowers keyframe quality/fps; Coach tells user to slow down; keyframes queue and flush; sweep continues |
-| Background voices (TV, other people) | Heard as speech in hands-free mode (noise reduction removes only hiss/hum); user switches to hold-to-talk |
-| Voice call drops | Browser re-offers (up to 5 times with backoff); the server hangs up the old call and attaches to the new one; capture continues meanwhile |
+| Background voices (TV, other people) | Engine `pipecat`: RNNoise + volume gate ignore distant voices (a TV ~20 dB quieter than the user, tested); a loud voice near the phone can still pass: raise `VAD_MIN_VOLUME` or use hold-to-talk |
+| Phone can't reach the laptop for voice (other network) | Voice reconnect attempts fail; capture continues; switch to `VOICE_ENGINE=direct` or add a TURN server |
+| Voice call drops | Browser re-offers (up to 5 times with backoff); the server hangs up the old call and starts the new one; capture continues meanwhile |
 | Phone sleeps or tab backgrounded | Wake Lock requested; on disconnect the app shows a resume prompt and reconnects; frames already saved are kept |
 | Tunnel URL changes between runs | Page and API share one origin and the QR/URL is printed at server start |
 
@@ -397,8 +410,10 @@ Every number answers "where did this come from?":
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Room area from reconstruction is off | Misses 10%/15% bars | De-risk in first spike; fallback capture mode decided early |
-| Duplicate counting across frames | Blows 5% count bar | Position-based dedupe + evaluation per shelf |
-| Spine OCR wrong on small/rotated text | Confident-wrong titles | Catalogue match threshold, precision-first tuning, high-res crops |
+| Duplicate counting across frames | Blows 5% count bar | Frame-to-frame tracking + same-work merge + evaluation per shelf |
+| Spine OCR wrong on small/rotated text | Confident-wrong titles | Strict title + author verification against one record, ambiguity check, high-res crops |
+| Background voices trigger the agent | Agent interrupts itself, answers the TV | Laptop-side RNNoise + volume-gated VAD (D18); hold-to-talk fallback |
+| Detector boxes non-books as books | Inflated count | `is_book` check in the read call (D19); local detector as upgrade |
 | Used-price sources thin in some countries | Many blanks/converted | Accept and label honestly; second country chosen for good coverage |
 | Live agent drifts into stating facts | Fabrication in speech | Prompt + tool-only fact path; voice summary read from the packet |
 | Overfitting to own room | Collapse at review | Test on a second, unseen shelf before submission |

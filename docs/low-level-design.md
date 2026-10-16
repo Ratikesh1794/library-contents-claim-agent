@@ -25,7 +25,8 @@ backend/
   core/              store.py (sweep dir I/O), cache.py, http.py, meter.py (usage/cost), facts.py (user corrections)
   stages/            quality.py, catalogue.py, identify.py, track.py, dedupe.py, measure_scale.py,
                      measure_books.py, measure_room.py, price.py, assemble.py, report.py
-  live/              app.py (FastAPI, /ws/live, /voice signalling, auth), agent.py (voice agent), coach.py
+  live/              app.py (FastAPI, /ws/live, /voice signalling, auth, rate limits), voice_pipecat.py (voice engine
+                     "pipecat"), agent.py (voice engine "direct" + shared tools), coach.py
   adapters/          openai_vision, open_library, google_books, ebay, frankfurter, null_reconstructor
   templates/         report.html.j2
 web/
@@ -83,32 +84,39 @@ class UserFact(BaseModel):
 | Keyframes | Every ~0.7 s, score a 320 px grayscale copy; upload only if sharp enough (`sharpFloor`) **and** the view changed (`diffFloor`, mean abs diff vs the last keyframe). Consecutive keyframes must still overlap, because dedupe tracks boxes between them. Cap ~400 per sweep. |
 | Frame grab | From the live **video** stream: `createImageBitmap(video)`, JPEG-encoded in a Web Worker (`OffscreenCanvas.convertToBlob`), long side ≤ 2560 px, shrunk until ≤ 2.5 MB. `ImageCapture.takePhoto` is **not** used: on real phones it refocused and fired the shutter every call (~2.6 s per frame, frozen preview). |
 | Quality scores | Quick browser-side scores (Laplacian variance, glare, brightness) only decide what to upload; the server re-scores every crop (section 4). |
-| Voice | WebRTC straight to OpenAI Realtime (section 3.2): mic track on an `RTCPeerConnection`, agent audio played by an `<audio>` element, data channel `oai-events` (used only to trigger the greeting). Audio contexts are unlocked synchronously inside the Start tap (mobile autoplay rules); a "tap to turn on the voice" fallback appears if the browser still blocks playback. |
+| Voice | WebRTC (section 3.2): mic track on an `RTCPeerConnection`, offer POSTed to `/voice`, agent audio played by an `<audio>` element. The answer's `X-Voice-Engine` header says which engine answered: `pipecat` greets server-side; `direct` needs the greeting triggered over the `oai-events` data channel. Audio contexts are unlocked synchronously inside the Start tap (mobile autoplay rules); a "tap to turn on the voice" fallback appears if the browser still blocks playback. |
 | Mic modes | Hands-free (Mute/Unmute toggles `track.enabled`) or **hold-to-talk** for noisy rooms (mic enabled only while the button is pressed). A mic-level meter drives the agent orb. |
 | Panel | Transcript tab (live captions per item id, both sides, plus coach tips and status lines) and Inventory tab (books with identified/reason tags, items). Agent state: listening / hearing / thinking / speaking / muted. |
 | Wake Lock | `navigator.wakeLock.request("screen")` on start; re-request on `visibilitychange`. If unsupported, show a "keep screen on" notice. |
 | Upload queue | Bounded (max 20). Depth > 10: JPEG quality 0.82 → 0.6 and half the rate. A 413 is shown in the status pill and logged, never dropped silently. Frames stay queued until acked and are resent after reconnect (server dedupes by `seq`). |
 | Connection UX | Status pill (connected / reconnecting / voice issues). Voice reconnects up to 5 times with backoff; capture keeps working without voice. |
 
-### 3.2 Server live path (`backend/live/app.py`, `backend/live/agent.py`)
+### 3.2 Server live path (`backend/live/app.py`, `voice_pipecat.py`, `agent.py`)
 
 State per sweep: `SweepSession{sweep_id, sd, coach, down (queue to browser), inject (queue to agent), frame_q, transcript, call_id, voice_task, hooks}`.
 
 Flow:
 1. `POST /api/sweeps` creates the dir and `meta.json`, and starts a frame worker for the sweep.
-2. `POST /api/sweeps/{id}/frames` saves the keyframe and queues it. The frame worker runs `identify_frame` on each one **in order**, passing the previous frame so already-identified books are reused (section 5.3), then rebuilds the live inventory with the same dedupe as the pipeline and lets the Coach react.
-3. **Voice signalling:** the phone POSTs its SDP offer to `POST /api/sweeps/{id}/voice`. The server creates the call with OpenAI (`realtime.calls.create(sdp, session=…)`, the API key never leaves the laptop), returns the SDP answer, and attaches to the same call **sideband** (`realtime.connect(call_id=…)`). Voice audio never passes through this server. A new offer (reconnect) hangs up the previous call.
-4. Session config (sent once at call creation): `server_vad` (threshold 0.7, silence 700 ms, prefix 300 ms, interrupt on speech), input `noise_reduction: far_field`, transcription `gpt-4o-mini-transcribe`, tools below, system prompt from `backend/prompts/agent.py`.
-5. Sideband events become UI messages on `/ws/live`: transcript deltas/finals per item id, agent state (from `input_audio_buffer.speech_started/stopped`, `response.*`, `output_audio_buffer.started/stopped`), errors as status lines. Tool calls run when their arguments are complete; results are returned after `response.done`, then `response.create`.
-6. Coach and app-state messages are injected as user items prefixed `[app-state]`, only when no response is in progress.
-7. `finish_sweep` (tool or button) → pipeline; then `PACKET_READY` with the templated voice summary.
+2. `POST /api/sweeps/{id}/frames` saves the keyframe and queues it. The frame worker takes the **newest** queued frame (skipped ones are identified at finish), copies the last analysed frame's results if the view was already seen (`identify.carry_over`, §5.3), otherwise runs `identify_frame` with that frame as the reuse anchor. It then rebuilds the live inventory with the same dedupe as the pipeline and lets the Coach react.
+3. **Voice signalling:** the phone POSTs its SDP offer to `POST /api/sweeps/{id}/voice`. The selected engine (`VOICE_ENGINE`) answers it; the answer carries `X-Voice-Engine`. A new offer (reconnect) hangs up the previous call. The API key never leaves the laptop.
+4. Coach and app-state messages are injected as user messages prefixed `[app-state]`, only when nobody is speaking.
+5. `finish_sweep` (tool or button) → pipeline; then `PACKET_READY` with the templated voice summary; the transcript is saved to `transcript.json`.
 
-`/ws/live` is down-only: `inventory`, `coach`, `status`, `transcript`, `agent_state`, `packet_ready`.
+`/ws/live` is down-only: `inventory`, `coach`, `status`, `transcript` (role, item id, text, append|set), `agent_state` (listening / hearing / thinking / speaking), `packet_ready`.
 
-**Voice engines** (`VOICE_ENGINE`, same `start_call / run / hangup` interface, same tools via `agent.execute_tool`):
-- `pipecat` (default, `backend/live/voice_pipecat.py`): the phone's WebRTC goes to the laptop (Pipecat `SmallWebRTCTransport`, same Wi-Fi; ngrok carries only the page and signalling). Pipeline: RNNoise filter → user aggregator with Silero VAD (`VADParams(confidence 0.7, start_secs 0.3, stop_secs 0.5, min_volume 0.72)`) → OpenAI Realtime with server turn detection **off** (`turn_detection=False`, `far_field` noise reduction kept) → transport out. A Pipecat observer maps frames to the same UI messages. Measured on Pipecat's volume scale: user near the phone 0.84–0.91 (0.78 at half volume), a TV ~22 dB quieter 0.64–0.67; at the default gate 0.6 the TV was transcribed as the user, at 0.72 it was ignored while the user was still heard. A harmless realtime "truncate" error after interruptions is logged, not shown.
-- `direct` (`backend/live/agent.py`): the original path above (phone ↔ OpenAI, server sideband). Works on any network, but background voices trigger it.
-- Spoken shelf references are normalised to Coach regions ("shelf2", "second shelf", "top shelf" → `row2` / `row1`).
+**Engine `pipecat`** (default, `backend/live/voice_pipecat.py`)
+- Transport: Pipecat `SmallWebRTCTransport`; the phone's WebRTC terminates on the laptop (same Wi-Fi; ngrok carries only the page and signalling; `ICE_SERVERS` for STUN/TURN).
+- Pipeline: `transport.input()` (RNNoise filter, `NOISE_FILTER`) → user aggregator with Silero VAD `VADParams(confidence 0.7, start_secs 0.3, stop_secs 0.5, min_volume VAD_MIN_VOLUME=0.72)` → `OpenAIRealtimeLLMService` (server turn detection **off**, `far_field` noise reduction, transcription `gpt-4o-mini-transcribe`, voice `alloy`) → `transport.output()` → assistant aggregator.
+- Volume gate, measured on Pipecat's 0..1 loudness scale: user near the phone 0.84–0.91 (0.78 at half volume), a TV ~22 dB quieter 0.64–0.67. End to end (scripted WebRTC client, real OpenAI): at 0.6 the TV was transcribed as the user and answered; at 0.72 it was ignored and the user was still heard. Trade-off: a soft first word can be clipped.
+- A Pipecat observer (`UIBridge`) maps frames to UI messages: user started/stopped speaking → hearing/thinking + caption placeholder; (interim) transcription → user caption; `TTSTextFrame` pieces (they carry their own spacing) → agent caption; bot started/stopped speaking → speaking/listening. Only each frame's first push is used, and the upstream copy of broadcast frames is ignored. The harmless realtime "already shorter than" truncate error after an interruption is logged, not shown.
+- Tools are plain async functions (Pipecat builds the schema from signature + docstring) that call the shared `agent.execute_tool`. Greeting: `LLMRunFrame` when the client connects.
+
+**Engine `direct`** (`backend/live/agent.py`)
+- The server creates the call with OpenAI (`realtime.calls.create(sdp, session=…)`), returns the SDP answer and attaches to the same call **sideband** (`realtime.connect(call_id=…)`); voice audio never passes through the laptop. Works on any network.
+- Session: `server_vad` (threshold 0.7, silence 700 ms, prefix 300 ms, interrupt on speech), `far_field` noise reduction. Background voices trigger it.
+- Sideband events become the same UI messages; tool results go back after `response.done`, then `response.create`.
+
+**Shared** (`agent.execute_tool`): half-filled tool calls are rejected so the model asks instead of guessing; spoken shelf references are normalised to Coach regions ("shelf2", "second shelf", "top shelf" → `row2` / `row1`).
 
 ### 3.3 Agent contract
 
@@ -220,6 +228,10 @@ Input: `frames/*.jpg`, `frames.json`. Output: `sightings.json`.
 - `test_catalogue_match`: exact title accepted; near-duplicate titles ambiguous → rejected; empty read → no query.
 - `test_orient_picks_best`: fake reader returns garbage for 0°, valid for 90° → picks 90°.
 - `test_no_promote`: raw_text set but score < T → `title is None`.
+
+### 5.5 Not-a-book check
+
+The spine-read call also returns `is_book`: whether the crop is *mainly* one book spine. Crops that mainly show something else (a perfume box, bottle, DVD…) are dropped, so they are never counted or priced. No extra model call. On a real sweep this rejected a perfume box ("ARABIAN AROMA") whose detector box also clipped a real book, while three real spines passed.
 
 ## 6. Coach (`coach.py`)
 
@@ -373,16 +385,21 @@ Metrics:
 
 ```
 models:   vision_model=gpt-4.1-mini  live_model=gpt-realtime-mini  transcribe_model=gpt-4o-mini-transcribe  voice=alloy
-voice:    noise_reduction=far_field  vad_threshold=0.7  vad_silence_ms=700  vad_prefix_ms=300
+voice:    voice_engine=pipecat  noise_filter=rnnoise  vad_min_volume=0.72  vad_confidence=0.7  vad_start_secs=0.3
+          vad_stop_secs=0.5  ice_servers=stun:stun.l.google.com:19302  noise_reduction=far_field
+          direct engine: vad_threshold=0.7  vad_silence_ms=700  vad_prefix_ms=300
 quality:  blur_norm_px=128 blur_min=80 glare_max=0.04 dark_min=60(p99) min_text_px=12
-identify: min_box_px=900 occl_iou=0.3 title_match_T=0.85 author_match_T=0.8 publisher_match_T=0.85 review_T=0.9 crop_workers=6 identify_workers=6 reuse_iou=0.5
+identify: min_box_px=900 occl_iou=0.3 title_match_T=0.85 author_match_T=0.8 publisher_match_T=0.85 review_T=0.9
+          crop_workers=6 identify_workers=6 reuse_iou=0.5
+novelty:  novelty_skip_coverage=0.85 novelty_max_zoom=1.15 retry_reasons=(blur glare too_dark too_far blocked partial)
 tracking: track_max_side=1024 track_features=2000 track_min_inliers=25 track_span=2 track_iou=0.3 item_contain_weight=0.6
 coach:    asks_per_region=2 ask_gap_s=8 settle_s=2
 price:    list_T=0.8 appraisal_threshold_usd=100 (converted via FX at runtime) antiquarian_year=1900 condition_assumed="good"
 serving:  keyframe_max_bytes=3_000_000 public_origin=<set by run.sh>
+limits:   rate_frames=5/1s rate_voice=6/60s rate_finish=3/60s rate_new_sweep=10/60s
 marker:   marker_side_cm=<measured, MARKER_SIDE_CM> marker_dict=DICT_4X4_50
 ```
-Model names, voice and noise settings can be overridden in `.env`.
+Overridable in `.env`: model names, `VOICE`, `VOICE_ENGINE`, `NOISE_FILTER`, `VAD_MIN_VOLUME`, `NOISE_REDUCTION`, `VAD_THRESHOLD`, `ICE_SERVERS`.
 
 ## 14. Build order (maps to 48-hour plan)
 
@@ -405,17 +422,14 @@ Model names, voice and noise settings can be overridden in `.env`.
 - Catalogue misses for regional or older titles (leads to honest `unidentified`).
 - Used-price comparability (different editions in one listing pool).
 
-### 5.5 Not-a-book check
-
-The spine-read call also returns `is_book`: whether the crop is *mainly* one book spine. Crops that mainly show something else (a perfume box, bottle, DVD…) are dropped, so they are never counted or priced. No extra model call. On a real sweep this rejected a perfume box ("ARABIAN AROMA") whose detector box also clipped a real book, while three real spines passed.
-
 ## 16. Implementation status (as built, 2026-10-17)
 
 Changes from the original design, and why:
 
 | Area | Design said | Built | Why |
 |---|---|---|---|
-| Voice | Gemini Live; PCM audio over our WebSocket; low-res video to the model | OpenAI Realtime over **WebRTC** from the phone, server attached sideband; the agent does not see video | Over our WebSocket the browser's echo cancellation didn't apply: the agent heard itself and the room |
+| Voice | Gemini Live; PCM audio over our WebSocket; low-res video to the model | OpenAI Realtime over **WebRTC**; default engine Pipecat on the laptop (RNNoise + volume-gated VAD), `direct` phone↔OpenAI as fallback; the agent does not see video | Over our WebSocket the agent heard itself and the room; with OpenAI's own turn detection a background TV started turns |
+| Identification | Weighted fuzzy score ≥ `accept_T` | Title **and** author must match one record; edition/ISBN only when verified | The old rule accepted "Dune Messiah" for "Dune" and filled in an unseen author and an unverified ISBN |
 | Keyframes | `ImageCapture.takePhoto` stills | Video frames, encoded in a Web Worker | takePhoto took ~2.6 s per frame and froze the preview |
 | Quality | Raw Laplacian variance, mean luma | Fixed-size blur, 99th-percentile darkness | The old gates rejected 78/97 readable crops on a real sweep |
 | Dedupe | Rows linked by marker plane or identified neighbours | Frame-to-frame homography tracking | Neighbour anchors fail when few books are identified |
@@ -423,7 +437,7 @@ Changes from the original design, and why:
 | Per-frame cost | Detect every keyframe | Carry over already-seen views; newest frame first; not-a-book check in the read call | Fewer model calls, live panel stays current, fewer false books |
 | Models | Unspecified | Mini models by default | Cost |
 
-Built and covered by tests: quality gating, identify (segment/orient/read/match, parallel reads, read-once reuse), catalogue matching, tracking + dedupe, Coach, marker scale, book dimensions, room math (synthetic points), pricing (FX, appraisal rules), assemble/validation, self-contained report, pipeline, eval, ingest, API auth/limits, WebRTC voice signalling + sideband agent. Voice verified end to end with a scripted WebRTC client against real OpenAI.
+Built and covered by tests: quality gating, identify (segment/orient/read/match, parallel reads, read-once reuse), catalogue matching, tracking + dedupe, carry-over of already-seen views, not-a-book check, strict identity, Coach, marker scale, book dimensions, room math (synthetic points), pricing (FX, appraisal rules), assemble/validation, self-contained report, pipeline, eval, ingest, API auth and rate limits, both voice engines. Both voice engines verified end to end with a scripted WebRTC client against real OpenAI (quiet room and background-TV scenarios).
 
 Not built yet:
 - Room reconstruction and **markerless** scale: `NullReconstructor` only, so room fields stay blank and go to review. Research favoured fusing several scale sources (metric-depth model such as MapAnything, phone motion sensors, scene priors) and measuring the error on real rooms; not started.
