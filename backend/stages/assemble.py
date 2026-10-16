@@ -8,36 +8,45 @@ Review queue: one entry per line, one reason, highest priority first (REVIEW_PRI
 from __future__ import annotations
 
 import time
+from collections.abc import Iterable
 from pathlib import Path
 
 from backend.core import facts, store
 from backend.config import CFG, Config
-from backend.schemas import (BookLine, BookDims, Geometry, ItemLine, Object, Packet, PriceResult,
+from backend.schemas import (BookLine, BookDims, Geometry, ItemLine, Object, Packet, Price, PriceResult,
                              ReviewRef, Room, Totals, UserFact)
 
 REVIEW_PRIORITY = ["needs_appraisal", "unidentified", "no_price", "low_confidence",
                    "converted", "no_scale", "scale_suspect"]
 
 
+def _total(values: Iterable[float | None]) -> float:
+    """Sum the known amounts; unknown (None) never counts as 0, it is simply not in the total."""
+    return round(sum(v for v in values if v is not None), 2)
+
+
 def compute_totals(books: list[BookLine], items: list[ItemLine], shelf_run_m: float | None, currency: str) -> Totals:
     def counted_book(b: BookLine) -> bool:
-        return b.status != "needs_appraisal" and any(p and p.amount is not None for p in (b.replacement, b.used))
+        return b.status != "needs_appraisal" and any(p is not None and p.amount is not None for p in (b.replacement, b.used))
 
     def counted_item(i: ItemLine) -> bool:
         return i.status in ("priced", "range") and i.price is not None and i.price.low is not None
 
+    priced_books = [b for b in books if b.status != "needs_appraisal"]
+    item_prices: list[Price] = []
+    for line in items:
+        if counted_item(line) and line.price is not None:
+            item_prices.append(line.price)
     return Totals(
         currency=currency, book_count=len(books),
         books_identified=sum(b.status == "identified" for b in books),
         books_unidentified=sum(b.status == "unidentified" for b in books),
         books_needs_appraisal=sum(b.status == "needs_appraisal" for b in books),
         item_count=len(items), shelf_run_m=shelf_run_m,
-        books_replacement_cost=round(sum(b.replacement.amount for b in books
-                                         if b.status != "needs_appraisal" and b.replacement and b.replacement.amount is not None), 2),
-        books_used_value=round(sum(b.used.amount for b in books
-                                   if b.status != "needs_appraisal" and b.used and b.used.amount is not None), 2),
-        items_replacement_cost_low=round(sum(i.price.low for i in items if counted_item(i)), 2),
-        items_replacement_cost_high=round(sum(i.price.high for i in items if counted_item(i)), 2),
+        books_replacement_cost=_total(b.replacement.amount if b.replacement is not None else None for b in priced_books),
+        books_used_value=_total(b.used.amount if b.used is not None else None for b in priced_books),
+        items_replacement_cost_low=_total(p.low for p in item_prices),
+        items_replacement_cost_high=_total(p.high for p in item_prices),
         excluded_from_totals=sum(not counted_book(b) for b in books) + sum(not counted_item(i) for i in items),
     )
 
@@ -51,22 +60,22 @@ def build(sd: Path, cfg: Config = CFG) -> Packet:
     objs = store.read(sd, "objects.json", list[Object], default=[])
     geo = store.read(sd, "geometry.json", Geometry, default=Geometry())
     room = store.read(sd, "room.json", Room, default=None)
-    prices = {p.object_id: p for p in store.read(sd, "prices.json", list[PriceResult], default=[])}
-    ufacts = store.read(sd, "user_facts.json", list[UserFact], default=[])
+    prices: dict[str, PriceResult] = {p.object_id: p for p in store.read(sd, "prices.json", list[PriceResult], default=[])}
+    user_facts: list[UserFact] = store.read(sd, "user_facts.json", list[UserFact], default=[])
     incomplete = store.read(sd, "incomplete.json", list[str], default=[])
     cur = meta["currency"]
     books, items, review = [], [], []
 
     for o in objs:
-        f = facts.flags(o, ufacts)
-        notes = [x.text for x in facts.facts_for(o, ufacts)]
-        pr = prices.get(o.id)
+        f = facts.flags(o, user_facts)
+        notes = [x.text for x in facts.facts_for(o, user_facts)]
+        pr: PriceResult | None = prices.get(o.id)
         reasons: set[str] = set()
         if o.kind == "book":
             status, reason = o.status, o.reason
             if "skip" in f:
                 status, reason = "unidentified", "user_skipped"
-            if pr and pr.status == "needs_appraisal":
+            if pr is not None and pr.status == "needs_appraisal":
                 status, reason = "needs_appraisal", pr.reason
             dims = geo.books.get(o.id, BookDims(reason="no_scale"))
             line = BookLine(
@@ -74,8 +83,8 @@ def build(sd: Path, cfg: Config = CFG) -> Packet:
                 catalogue_match_score=o.catalogue_match_score, id_confidence=o.id_confidence, reason=reason,
                 spine_height_cm=dims.height_cm, spine_thickness_cm=dims.thickness_cm, dims_unc_cm=dims.unc_cm,
                 frame_ref=o.frame_ref, bbox=o.bbox, user_notes=notes,
-                replacement=pr.replacement if pr and status != "needs_appraisal" else None,
-                used=pr.used if pr and status != "needs_appraisal" else None)
+                replacement=pr.replacement if pr is not None and status != "needs_appraisal" else None,
+                used=pr.used if pr is not None and status != "needs_appraisal" else None)
             books.append(line)
             if status == "needs_appraisal":
                 reasons.add("needs_appraisal")
@@ -93,12 +102,12 @@ def build(sd: Path, cfg: Config = CFG) -> Packet:
                 reasons.add("scale_suspect")
             detail = reason
         else:
-            status = pr.status if pr else "unpriced"
+            status = pr.status if pr is not None else "unpriced"
             line = ItemLine(
                 id=o.id, status=status, category=o.category, material=o.material, brand_model=o.brand_model,
                 dims_hint=o.dims_hint, id_confidence=o.id_confidence, frame_ref=o.frame_ref, bbox=o.bbox,
-                price=pr.replacement if pr and status != "needs_appraisal" else None,
-                reason=pr.reason if pr else "not_priced", user_notes=notes)
+                price=pr.replacement if pr is not None and status != "needs_appraisal" else None,
+                reason=pr.reason if pr is not None else "not_priced", user_notes=notes)
             items.append(line)
             if status == "needs_appraisal":
                 reasons.add("needs_appraisal")

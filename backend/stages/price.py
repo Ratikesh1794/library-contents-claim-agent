@@ -78,9 +78,9 @@ def _mk(kind, rows, currency, cond, amount=None, low=None, high=None, rep=None) 
                  retrieved_at=l.retrieved_at, condition=cond, count=len(rows), converted=conv, fx_rate=rate, fx_date=date)
 
 
-def price_book(o: Object, ufacts: list[UserFact], currency: str, country: str | None,
+def price_book(o: Object, user_facts: list[UserFact], currency: str, country: str | None,
                src: PriceSource, fx: FX, cfg: Config = CFG) -> PriceResult:
-    f = facts.flags(o, ufacts)
+    f = facts.flags(o, user_facts)
     if "signed" in f:
         return PriceResult(object_id=o.id, status="needs_appraisal", reason="signed_or_inscribed")
     if o.year and o.year < cfg.antiquarian_year:
@@ -116,19 +116,19 @@ def price_book(o: Object, ufacts: list[UserFact], currency: str, country: str | 
     return PriceResult(object_id=o.id, status=status, replacement=repl, used=usd)
 
 
-def price_item(o: Object, ufacts: list[UserFact], currency: str, country: str | None,
+def price_item(o: Object, user_facts: list[UserFact], currency: str, country: str | None,
                src: PriceSource, fx: FX, cfg: Config = CFG) -> PriceResult:
-    f = facts.flags(o, ufacts)
+    f = facts.flags(o, user_facts)
     if o.category == "art" and "print" not in f:
         return PriceResult(object_id=o.id, status="needs_appraisal", reason="art_without_print_confirmation")
     if not o.category:
         return PriceResult(object_id=o.id, status="unpriced", reason="unidentified")
     known = bool(o.brand_model)
-    query = o.brand_model if known else " ".join(x for x in (o.material, "art print decor" if o.category == "art" else o.category) if x)
+    query: str = o.brand_model or " ".join(x for x in (o.material, "art print decor" if o.category == "art" else o.category) if x)
     local = src.local_market(country)
     acc = (lambda l: token_set_ratio(o.brand_model, l.title) >= cfg.list_T and not _blocked(l.title, "", cfg)) if known \
         else (lambda l: not _blocked(l.title, "", cfg))
-    rows = _gather(query, "new", local, _NoBooks(src), acc, currency, fx)
+    rows = _gather(query, "new", local, _AnyCategory(src), acc, currency, fx)
     if not rows:
         return PriceResult(object_id=o.id, status="unpriced", reason="no_price")
     amts = sorted(r[1] for r in rows)
@@ -143,25 +143,33 @@ def price_item(o: Object, ufacts: list[UserFact], currency: str, country: str | 
     return PriceResult(object_id=o.id, status="range", replacement=_mk("replacement", rows, currency, "new", low=lo, high=hi, rep=rep))
 
 
-class _NoBooks:
-    """Wrap a PriceSource so item searches are not restricted to the books category (if it supports it)."""
-    def __init__(self, src): self.src = src
-    def search(self, q, m, c):
+class _AnyCategory(PriceSource):
+    """Wrap a PriceSource so item searches are not restricted to the books category (if the source supports it)."""
+
+    def __init__(self, src: PriceSource):
+        self.src = src
+
+    def search(self, query: str, market: str, condition: str) -> list[Listing]:
         try:
-            return self.src.search(q, m, c, books=False)
+            return self.src.search(query, market, condition, books=False)   # type: ignore[call-arg]
         except TypeError:
-            return self.src.search(q, m, c)
-    def local_market(self, c): return self.src.local_market(c)
-    def fallback_markets(self): return self.src.fallback_markets()
+            return self.src.search(query, market, condition)
+
+    def local_market(self, country: str | None) -> str | None:
+        return self.src.local_market(country)
+
+    def fallback_markets(self) -> list[str]:
+        return self.src.fallback_markets()
 
 
 def run(sd: Path, source: PriceSource | None = None, fx: FX | None = None,
         cfg: Config = CFG, deadline: float | None = None) -> None:
     sd = Path(sd)
-    src, fx = source or deps.price_source(), fx or deps.fx()
+    src: PriceSource = source or deps.price_source()
+    rates: FX = fx or deps.fx()
     meta = store.read(sd, "meta.json")
     objs = store.read(sd, "objects.json", list[Object], default=[])
-    ufacts = store.read(sd, "user_facts.json", list[UserFact], default=[])
+    user_facts: list[UserFact] = store.read(sd, "user_facts.json", list[UserFact], default=[])
     cur, country = meta["currency"], meta.get("country")
     timed_out = []
 
@@ -171,7 +179,7 @@ def run(sd: Path, source: PriceSource | None = None, fx: FX | None = None,
             return None
         try:
             fn = price_book if o.kind == "book" else price_item
-            return fn(o, ufacts, cur, country, src, fx, cfg)
+            return fn(o, user_facts, cur, country, src, rates, cfg)
         except Exception as e:                  # NFR-E5: one failure => blank line + review, not a crash
             log.warning("pricing %s failed: %s", o.id, e)
             return PriceResult(object_id=o.id, status="unpriced", reason="price_error")

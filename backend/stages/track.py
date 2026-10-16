@@ -61,11 +61,17 @@ def project(H: np.ndarray, box: BBox) -> BBox:
     return (int(pts[:, 0].min()), int(pts[:, 1].min()), int(pts[:, 0].max()), int(pts[:, 1].max()))
 
 
+def intersection(a: BBox, b: BBox) -> int:
+    return max(0, min(a[2], b[2]) - max(a[0], b[0])) * max(0, min(a[3], b[3]) - max(a[1], b[1]))
+
+
+def area(b: BBox) -> int:
+    return (b[2] - b[0]) * (b[3] - b[1])
+
+
 def iou(a: BBox, b: BBox) -> float:
-    ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
-    iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
-    inter = ix * iy
-    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    inter = intersection(a, b)
+    union = area(a) + area(b) - inter
     return inter / union if union > 0 else 0.0
 
 

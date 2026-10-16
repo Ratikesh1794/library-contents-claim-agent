@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 from statistics import median
+from typing import Literal
 
 import numpy as np
 
@@ -22,7 +23,7 @@ from backend.core import store
 from backend.stages import track
 from backend.stages.catalogue import work_key
 from backend.config import CFG, Config
-from backend.schemas import Frame, Object, Sighting
+from backend.schemas import BBox, Frame, Object, Reason, Sighting
 
 
 def assign_rows(boxes: list[tuple[int, int, int, int]]) -> list[int]:
@@ -74,12 +75,10 @@ class _Groups:
         return out
 
 
-def _overlap(a, b) -> float:
+def _overlap(a: BBox, b: BBox) -> float:
     """Intersection over the SMALLER box: 1.0 when one box sits inside the other."""
-    ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
-    iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
-    small = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
-    return ix * iy / small if small > 0 else 0.0
+    small = min(track.area(a), track.area(b))
+    return track.intersection(a, b) / small if small > 0 else 0.0
 
 
 def _same_item_kind(a: Sighting, b: Sighting) -> bool:
@@ -87,15 +86,15 @@ def _same_item_kind(a: Sighting, b: Sighting) -> bool:
     return ca is None or cb is None or ca == cb
 
 
-def _link_pairs(A: list[Sighting], B: list[Sighting], H: np.ndarray, cfg: Config) -> list[tuple[Sighting, Sighting]]:
+def _link_pairs(frame_a: list[Sighting], frame_b: list[Sighting], h: np.ndarray, cfg: Config) -> list[tuple[Sighting, Sighting]]:
     """Greedy one-to-one matching of A boxes (projected into B) to B boxes of the same kind.
     Books: plain IoU (spines are thin and side by side, so containment would merge neighbours).
     Items: the vision model boxes them loosely and inconsistently (a lamp alone vs lamp + table), so a box
     mostly inside the other also counts, provided the categories agree."""
     cands = []
-    for sa in A:
-        pa = track.project(H, sa.bbox)
-        for sb in B:
+    for sa in frame_a:
+        pa = track.project(h, sa.bbox)
+        for sb in frame_b:
             if sb.kind != sa.kind:
                 continue
             o = track.iou(pa, sb.bbox)
@@ -110,12 +109,12 @@ def _link_pairs(A: list[Sighting], B: list[Sighting], H: np.ndarray, cfg: Config
     return out
 
 
-def _make(oid: str, kind: str, group: list[Sighting], frames: dict[str, Frame],
+def _make(oid: str, kind: Literal["book", "item"], group: list[Sighting], frames: dict[str, Frame],
           row_pos: dict[str, tuple[str, int]]) -> Object:
     accepted = [s for s in group if s.accepted]
     b = max(accepted or group, key=lambda s: (s.score or 0.0, s.crop_blur or 0.0))
     shelf, pos = row_pos.get(b.id, (None, None))
-    reasons = [s.reason for s in group if s.reason]
+    reasons: list[Reason] = [s.reason for s in group if s.reason is not None]
     o = Object(id=oid, kind=kind, sighting_ids=[s.id for s in group],
                shelf=shelf, position=pos, status="identified", frame_ref=frames[b.frame_id].path,
                bbox=b.bbox, layout=b.layout, rotation_deg=b.rotation_deg)
@@ -174,7 +173,7 @@ def build_objects(sightings: list[Sighting], frames: list[Frame],
             by_key[next(iter(keys))].append(root)
     for roots in by_key.values():
         copies: list[tuple[set[str], list[str]]] = []          # (frames seen in, groups) per physical copy
-        for r in sorted(roots, key=lambda r: min(fr[f].t for f in frames_of[r])):
+        for r in sorted(roots, key=lambda root: min(fr[f].t for f in frames_of[root])):
             c = next((c for c in copies if not (c[0] & frames_of[r])), None)
             if c:
                 c[0].update(frames_of[r]); c[1].append(r)

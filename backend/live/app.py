@@ -101,7 +101,9 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
 
     # ------------------------------------------------------------------ auth
     def check_token(t: str | None) -> bool:
-        return bool(t) and hmac.compare_digest(t, app.state.token)
+        if not t:
+            return False
+        return hmac.compare_digest(t, app.state.token)
 
     def require_token(request: Request):
         if not check_token(request.headers.get("x-sweep-token") or request.query_params.get("t")):
@@ -174,7 +176,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
         s.finished = True
         await s.down.put({"type": "status", "text": "Building your claim packet…"})
         try:
-            packet = await asyncio.to_thread(pipeline.run, s.sd, None, None, cfg, pipeline_deps or {})
+            await asyncio.to_thread(pipeline.run, s.sd, None, None, cfg, pipeline_deps or {})
         except Exception as e:
             log.exception("pipeline failed")
             s.finished = False
@@ -233,11 +235,12 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
         if s.call_id:
             asyncio.create_task(voice.hangup(s.call_id))
         try:
-            answer, s.call_id = await voice.start_call(offer, store.read(s.sd, "meta.json"), cfg)
+            answer, call_id = await voice.start_call(offer, store.read(s.sd, "meta.json"), cfg)
         except Exception as e:
             log.warning("voice call failed: %s", e)
             raise HTTPException(502, f"Could not start the voice call: {e}")
-        s.voice_task = asyncio.create_task(voice.run(s, s.call_id, cfg))
+        s.call_id = call_id
+        s.voice_task = asyncio.create_task(voice.run(s, call_id, cfg))
         return Response(answer, media_type="application/sdp")
 
     @app.post("/api/sweeps/{sweep_id}/finish", dependencies=[Depends(require_token)])
