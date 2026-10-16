@@ -30,9 +30,10 @@ backend/
   adapters/          openai_vision, open_library, google_books, ebay, frankfurter, null_reconstructor
   templates/         report.html.j2
 web/
-  index.html, app.js, style.css   capture, keyframes, WebRTC voice, transcript + inventory panel
+  index.html, app.js, style.css               phone: capture, keyframes, WebRTC voice, captions, counts, WebXR room
+  dashboard.html, dashboard.js, dashboard.css laptop: records, live activity, conversation, packet, phone QR
 scripts/
-  run.sh             server + tunnel (ngrok fixed domain or random), prints URL + QR with the sweep token
+  run.sh             server + tunnel (ngrok fixed domain or random); prints and opens the dashboard link
   mkcert_setup.sh    optional local HTTPS path
 tests/
   test_*.py          one small file per stage; fakes.py holds fake services
@@ -85,7 +86,7 @@ class UserFact(BaseModel):
 | Quality scores | Quick browser-side scores (Laplacian variance, glare, brightness) only decide what to upload; the server re-scores every crop (section 4). |
 | Voice | WebRTC (section 3.2): mic track on an `RTCPeerConnection`, offer POSTed to `/voice`, agent audio played by an `<audio>` element. The answer's `X-Voice-Engine` header says which engine answered: `pipecat` greets server-side; `direct` needs the greeting triggered over the `oai-events` data channel. Audio contexts are unlocked synchronously inside the Start tap (mobile autoplay rules); a "tap to turn on the voice" fallback appears if the browser still blocks playback. |
 | Mic modes | Hands-free (Mute/Unmute toggles `track.enabled`) or **hold-to-talk** for noisy rooms (mic enabled only while the button is pressed). A mic-level meter drives the agent orb. |
-| Panel | Transcript tab (live captions per item id, both sides, plus coach tips and status lines) and Inventory tab (books with identified/reason tags, items). Agent state: listening / hearing / thinking / speaking / muted. |
+| Screen | Deliberately minimal: camera, agent bar (latest agent line + latest user line), coach banner, counts (books / identified / items), Measure room, Finish. Agent state: listening / hearing / thinking / speaking / muted. Records and full transcript live on the laptop dashboard (§3.2a). |
 | Wake Lock | `navigator.wakeLock.request("screen")` on start; re-request on `visibilitychange`. If unsupported, show a "keep screen on" notice. |
 | Upload queue | Bounded (max 20). Depth > 10: JPEG quality 0.82 → 0.6 and half the rate. A 413 is shown in the status pill and logged, never dropped silently. Frames stay queued until acked and are resent after reconnect (server dedupes by `seq`). |
 | Connection UX | Status pill (connected / reconnecting / voice issues). Voice reconnects up to 5 times with backoff; capture keeps working without voice. |
@@ -127,10 +128,20 @@ Flow:
   {connected}; `inventory` now carries author, edition, shelf, frame, bbox, frames seen, confidence and frame counts;
   `packet_ready` carries totals, review count and room.
 - **HTTP:** `GET /dashboard?t=` (page), `GET /api/sweeps` (picker: newest first, live flag), `GET /api/sweeps/{id}/crop`
-  (record thumbnail from frame + box).
-- **Phone** (`web/app.js`): camera, voice controls, two caption lines, counts, Measure room, Finish. **Laptop**
-  (`web/dashboard.*`): KPIs, Books / Items / Review tables with thumbnails, search + filters, live activity, conversation,
-  packet panel; follows the newest (live) sweep unless the user picks one.
+  (record thumbnail from frame + box), `GET /api/connect` (phone link from `PUBLIC_ORIGIN` + QR as SVG, `https` flag).
+- **Phone** (`web/app.js`): camera, voice controls, two caption lines, counts, Measure room, Finish.
+- **Laptop** (`web/dashboard.*`), no framework, plain DOM:
+
+  | Area | Detail |
+  |---|---|
+  | Top bar | Sweep picker, "Follow new sweeps" toggle (follows the live, else newest, sweep; polls `/api/sweeps` every 4 s), status chips for phone / voice / server, "Connect phone". |
+  | Sweep header | Live / completed state, date, country, currency, frames, sweep id; "Open report" and "Packet JSON" once the packet exists. |
+  | Connect card | QR + phone link + copy; HTTPS warning when the link isn't HTTPS. Shown while no phone is connected, dismissible. |
+  | Packet card | Summary and totals (books replacement / used, items range, lines without a price, lines to review). |
+  | KPI cards | Books (+ identified bar and %), unidentified, other items, frames (+ analysed), room (area + dimensions), replacement value. |
+  | Records | Tabs Books / Other items / Review queue with counts; search; Identified / Unidentified filter; sortable columns; status badges; match meter; crop thumbnails; new rows flash. Click or Enter on a row opens a detail drawer (larger crop + every field); Esc closes. |
+  | Side | Live activity timeline (dot colour per event kind: frame, carried, coach, room, packet, phone, error) and the conversation as chat bubbles. Untrusted text is escaped before it reaches `innerHTML`. |
+  | Theme | Colour tokens on `:root`, dark values under `prefers-color-scheme: dark`; focus outlines; reduced motion respected. |
 
 ### 3.3 Agent contract
 

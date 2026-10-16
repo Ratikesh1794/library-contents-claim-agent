@@ -140,7 +140,7 @@ IDs are referenced by tests and the results sheet.
 | D17 | **Prompts are code constants in one package** (`backend/prompts/`); **mini models by default.** | One place to change what any model is told; lower cost per sweep. |
 | D18 | **Two voice engines behind one interface** (`VOICE_ENGINE`). Default `pipecat`: phone → laptop over WebRTC (same Wi-Fi), RNNoise, then a Silero VAD with a **volume gate** decides when the user speaks; OpenAI's own turn detection is off. Fallback `direct`: phone ↔ OpenAI Realtime, server attached sideband. | Background voices (a TV) made OpenAI's turn detection start turns and cut the agent off. The person holding the phone is much louder than a TV across the room: measured, a gate at 0.72 ignored a TV ~20 dB quieter while still hearing the user. `direct` stays for networks where the phone can't reach the laptop. |
 | D20 | **Room size from WebXR in the browser** (Chrome on ARCore-capable Android): the user aims at the floor corners in order, then a wall/ceiling point; hit tests give metres. No native app. | Users can't be asked to print a marker or install an app; the phone's own AR tracking is metric. Trade-offs: a short measuring step within the sweep (camera feed pauses), and iPhone Safari has no WebXR AR. |
-| D21 | **Two screens.** The phone shows only what the person sweeping needs (camera, voice, counts); a laptop dashboard shows every record, the live activity and the conversation. Live messages fan out to every connected screen. | A phone is too small to review records while walking a room; the person at the laptop can watch quality and coverage as it happens. |
+| D21 | **Two screens.** The phone shows only what the person sweeping needs (camera, voice, counts); a laptop dashboard shows every record, the live activity and the conversation. Live messages fan out to every connected screen. | A phone is too small to review records while walking a room; the person at the laptop can watch quality and coverage as it happens. The phone's QR code lives on the dashboard, not in the terminal. |
 | D19 | **Analyse only what is new.** A keyframe that mostly shows the last analysed frame copies its results; the live worker always works on the newest frame; the spine-read call also says whether a crop is a book at all. | Cost and latency scale with model calls, not frames; a stale queue made coach tips lag; non-books (perfume boxes) were being counted as books. |
 | D14 | **Phone is the capture device; the laptop runs the server.** The phone opens the web app in its browser over HTTPS (tunnel or local HTTPS). Laptop webcam is not the primary camera. | Walking a room needs a handheld rear camera; browsers allow camera/mic only on HTTPS, so access topology is part of the design. |
 
@@ -179,8 +179,10 @@ Rule: below the readable-pixel threshold the system does not infer. It marks `un
 │  Mic / speaker ◄──── WebRTC voice (echo cancellation) ───────────┼──┐  default engine: to the laptop (same Wi-Fi)
 │  Camera ─┬─► quality check (320 px) ─► keyframes (video frames) ──┼──┼─► POST /api/sweeps/<id>/frames
 │          └─► preview                                             │  │
-│  Transcript + inventory panel ◄── /ws/live (down only) ◄──────────┼──┼──┐
+│  Agent captions + counts ◄──── /ws/live?role=phone ◄──────────────┼──┼──┐
 └──────────────────────────────────────────────────────────────────┘  │  │
+   LAPTOP BROWSER: dashboard (records, live activity, conversation,    │  │
+   phone QR) ◄── /ws/live?role=dashboard (fan-out + history replay) ◄──┼──┤
                          │ HTTPS/WSS (tunnel: page, API, signalling)    │  │
 ┌────────────────────────▼──────────────────────── BACKEND (FastAPI) ───▼──┴─────────────────────────┐
 │  /voice: WebRTC signalling (API key stays here)                                                    │
@@ -393,7 +395,7 @@ Fallbacks, in order: marker-scaled plane fit from single-view homography on floo
 | Phone can't reach the laptop for voice (other network) | Voice reconnect attempts fail; capture continues; switch to `VOICE_ENGINE=direct` or add a TURN server |
 | Voice call drops | Browser re-offers (up to 5 times with backoff); the server hangs up the old call and starts the new one; capture continues meanwhile |
 | Phone sleeps or tab backgrounded | Wake Lock requested; on disconnect the app shows a resume prompt and reconnects; frames already saved are kept |
-| Tunnel URL changes between runs | Page and API share one origin and the QR/URL is printed at server start |
+| Tunnel URL changes between runs | Page and API share one origin; the laptop dashboard shows the current phone link as a QR code (`/api/connect`), and `NGROK_DOMAIN` keeps it fixed |
 
 ## 8. Traceability model
 
