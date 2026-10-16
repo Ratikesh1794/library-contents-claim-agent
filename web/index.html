@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<title>Library Contents Claim</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo" aria-hidden="true">📚</span> Contents Claim</div>
+  <div id="pill" class="pill" data-s="idle" role="status"><span class="dot"></span><span id="pillText">Ready</span></div>
+</header>
+
+<main>
+  <!-- 1. welcome -->
+  <section id="welcome" class="card">
+    <h1>Walk the room once.<br>Talk to the assistant.</h1>
+    <p class="lead">Slowly pan across each shelf while you chat. The assistant coaches you in the moment; the system reads every book and item, and builds your claim packet.</p>
+    <ol class="steps">
+      <li><b>Allow</b> camera and microphone when asked.</li>
+      <li><b>Say hello</b> and confirm your country. Speak normally; you can interrupt any time.</li>
+      <li><b>Pan slowly</b>, one shelf at a time. Say "skip this shelf" or "that one's signed" whenever you like.</li>
+    </ol>
+    <div class="row">
+      <label>Country<input id="country" value="US" maxlength="2" autocapitalize="characters" autocomplete="off"></label>
+      <label>Currency<input id="currency" value="USD" maxlength="3" autocapitalize="characters" autocomplete="off"></label>
+    </div>
+    <button id="start" class="btn primary big">Start sweep</button>
+    <p id="err" class="err" role="alert"></p>
+    <p class="fine">Keep the screen on. Photos and audio stay on your own computer and are only sent to the AI services used to read and price items.</p>
+  </section>
+
+  <!-- 2. live sweep -->
+  <section id="live" hidden>
+    <div class="stage">
+      <video id="cam" playsinline muted></video>
+      <div class="chips">
+        <span class="chip rec"><i aria-hidden="true"></i><b id="timer">0:00</b></span>
+        <span class="chip" id="chipBooks">0 books</span>
+        <span class="chip" id="chipItems">0 items</span>
+      </div>
+      <div id="coach" class="coach" role="status" aria-live="polite" hidden></div>
+    </div>
+
+    <div class="agentbar">
+      <div id="orb" class="orb" data-s="listening" aria-hidden="true"><span></span></div>
+      <div class="agenttext">
+        <div id="agentState" class="agentstate">Connecting…</div>
+        <div id="agentLine" class="agentline"></div>
+      </div>
+      <button id="mute" class="btn icon" aria-pressed="false">🎙 Mute</button>
+    </div>
+    <button id="talkMode" class="linkbtn">Noisy room? Use hold-to-talk</button>
+    <audio id="agentAudio" autoplay playsinline></audio>
+
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tabT" aria-selected="true" aria-controls="transcript">Transcript</button>
+      <button role="tab" id="tabI" aria-selected="false" aria-controls="inventory">Inventory <span id="tabCount" class="badge">0</span></button>
+    </div>
+    <div id="transcript" class="panel" role="log" aria-live="polite" aria-label="Conversation transcript">
+      <p class="empty">The conversation will appear here as you speak.</p>
+    </div>
+    <div id="inventory" class="panel" role="tabpanel" hidden>
+      <h3>Books</h3><ul id="books" class="list"></ul>
+      <h3>Other items</h3><ul id="items" class="list"></ul>
+    </div>
+
+    <div class="footer"><button id="finish" class="btn danger">Finish &amp; build packet</button></div>
+  </section>
+
+  <!-- 3. done -->
+  <section id="done" class="card" hidden>
+    <h1>Your claim packet is ready</h1>
+    <p id="summary" class="lead"></p>
+    <a id="reportLink" class="btn primary big" href="#">Open the report</a>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body></html>

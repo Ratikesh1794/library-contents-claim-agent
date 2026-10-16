@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+pydantic>=2
+opencv-contrib-python
+numpy
+requests
+jinja2
+openai
+python-dotenv
+pytest
+qrcode

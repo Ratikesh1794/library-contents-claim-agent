@@ -1,0 +1,182 @@
+"""PRICE stage: objects.json + user_facts.json + meta.json  ->  prices.json
+
+Rules (design D6, NFR-I1): a number exists only if it comes from a retrieved listing with
+source + URL + retrieved_at. The model never produces a price. No listing => None, excluded from totals.
+
+Books:
+  * pre-flags -> needs_appraisal (never priced): user said signed/inscribed; edition year < antiquarian_year
+  * replacement = lowest accepted NEW listing; used = median of accepted USED listings (>= used_min_listings),
+    fewer => a low/high range, no amount
+  * local marketplace first; if it has nothing, fallback markets, converted with FX (`converted=true`)
+  * post-flags -> needs_appraisal: any price above appraisal_threshold, or used prices diverge > diverge_ratio
+Items: brand/model known => query the model; unknown => category+material, 20th/80th percentile range;
+art => needs_appraisal unless the user said it is a print.
+
+TO UPGRADE: change sources in deps.price_source(); add an LLM yes/no listing judge inside `_accept`.
+"""
+from __future__ import annotations
+
+import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
+from difflib import SequenceMatcher
+from pathlib import Path
+from statistics import median
+
+import numpy as np
+
+from backend import deps
+from backend.core import facts, store
+from backend.stages.catalogue import norm, token_set_ratio
+from backend.config import CFG, Config
+from backend.ports import FX, Listing, PriceSource
+from backend.schemas import Object, Price, PriceResult, UserFact
+
+log = logging.getLogger(__name__)
+
+
+def _blocked(title: str, own: str, cfg: Config) -> bool:
+    t, o = norm(title), norm(own)
+    return any(w in t and w not in o for w in cfg.listing_blocklist)
+
+
+def _accept_book(o: Object, l: Listing, cfg: Config) -> bool:
+    """ISBN in the listing title, or: after removing author + format words, what is left must match the
+    title closely (so 'Dune' does NOT accept 'Dune Messiah')."""
+    if _blocked(l.title, o.title or "", cfg):
+        return False
+    if o.isbn and o.isbn.replace("-", "") in l.title.replace("-", ""):
+        return True
+    drop = set(norm(o.author).split()) | set(cfg.listing_noise) - set(norm(o.title).split())
+    rest = " ".join(w for w in norm(l.title).split() if w not in drop)
+    return SequenceMatcher(None, norm(o.title), rest).ratio() >= cfg.list_T
+
+
+def _convert(l: Listing, currency: str, fx: FX) -> tuple[float, bool, float | None, str | None]:
+    if l.currency == currency:
+        return l.price, False, None, None
+    rate, date = fx.rate(l.currency, currency)
+    return round(l.price * rate, 2), True, rate, date
+
+
+def _gather(query: str, cond: str, local: str | None, src: PriceSource, accept, currency: str, fx: FX):
+    """-> list of (listing, converted_amount, converted, rate, date) from the first market that has accepted ones."""
+    for market in ([local] if local else []) + src.fallback_markets():
+        try:
+            ls = [l for l in src.search(query, market, cond) if accept(l)]
+        except Exception as e:                  # NFR-E5
+            log.warning("price source failed (%s): %s", market, e)
+            continue
+        if ls:
+            return [(l, *_convert(l, currency, fx)) for l in ls]
+    return []
+
+
+def _mk(kind, rows, currency, cond, amount=None, low=None, high=None, rep=None) -> Price:
+    l, _, conv, rate, date = rep
+    return Price(kind=kind, amount=amount, low=low, high=high, currency=currency, source=l.source, url=l.url,
+                 retrieved_at=l.retrieved_at, condition=cond, count=len(rows), converted=conv, fx_rate=rate, fx_date=date)
+
+
+def price_book(o: Object, ufacts: list[UserFact], currency: str, country: str | None,
+               src: PriceSource, fx: FX, cfg: Config = CFG) -> PriceResult:
+    f = facts.flags(o, ufacts)
+    if "signed" in f:
+        return PriceResult(object_id=o.id, status="needs_appraisal", reason="signed_or_inscribed")
+    if o.year and o.year < cfg.antiquarian_year:
+        return PriceResult(object_id=o.id, status="needs_appraisal", reason="antiquarian")
+    if not o.title:
+        return PriceResult(object_id=o.id, status="unpriced", reason="unidentified")
+    query = o.isbn or f"{o.title} {o.author or ''}".strip()
+    local = src.local_market(country)
+    acc = lambda l: _accept_book(o, l, cfg)
+    new = _gather(query, "new", local, src, acc, currency, fx)
+    used = _gather(query, "used", local, src, acc, currency, fx)
+
+    repl = None
+    if new:
+        rep = min(new, key=lambda r: r[1])
+        repl = _mk("replacement", new, currency, "new", amount=rep[1], rep=rep)
+    usd = None
+    if used:
+        vals = sorted(r[1] for r in used)
+        rep = min(used, key=lambda r: abs(r[1] - median(vals)))
+        if len(vals) >= cfg.used_min_listings:
+            usd = _mk("used", used, currency, cfg.condition_assumed, amount=round(median(vals), 2), rep=rep)
+        else:
+            usd = _mk("used", used, currency, cfg.condition_assumed, low=vals[0], high=vals[-1], rep=rep)
+        if vals[-1] / max(vals[0], 0.01) > cfg.diverge_ratio:
+            return PriceResult(object_id=o.id, status="needs_appraisal", reason="used_prices_diverge")
+    limit = cfg.appraisal_threshold_usd * (fx.rate("USD", currency)[0] if currency != "USD" else 1.0)
+    if any(v is not None and v > limit for p in (repl, usd) if p for v in (p.amount, p.high)):
+        return PriceResult(object_id=o.id, status="needs_appraisal", reason="above_threshold")
+    if not repl and not usd:
+        return PriceResult(object_id=o.id, status="unpriced", reason="no_price")
+    status = "priced" if (repl and repl.amount is not None) or (usd and usd.amount is not None) else "range"
+    return PriceResult(object_id=o.id, status=status, replacement=repl, used=usd)
+
+
+def price_item(o: Object, ufacts: list[UserFact], currency: str, country: str | None,
+               src: PriceSource, fx: FX, cfg: Config = CFG) -> PriceResult:
+    f = facts.flags(o, ufacts)
+    if o.category == "art" and "print" not in f:
+        return PriceResult(object_id=o.id, status="needs_appraisal", reason="art_without_print_confirmation")
+    if not o.category:
+        return PriceResult(object_id=o.id, status="unpriced", reason="unidentified")
+    known = bool(o.brand_model)
+    query = o.brand_model if known else " ".join(x for x in (o.material, "art print decor" if o.category == "art" else o.category) if x)
+    local = src.local_market(country)
+    acc = (lambda l: token_set_ratio(o.brand_model, l.title) >= cfg.list_T and not _blocked(l.title, "", cfg)) if known \
+        else (lambda l: not _blocked(l.title, "", cfg))
+    rows = _gather(query, "new", local, _NoBooks(src), acc, currency, fx)
+    if not rows:
+        return PriceResult(object_id=o.id, status="unpriced", reason="no_price")
+    amts = sorted(r[1] for r in rows)
+    if known:                                   # single source => low == high (stated in `source`)
+        rep = min(rows, key=lambda r: r[1])
+        p = _mk("replacement", rows, currency, "new", low=amts[0], high=amts[0], rep=rep)
+        return PriceResult(object_id=o.id, status="priced", replacement=p)
+    if len(amts) < 3:
+        return PriceResult(object_id=o.id, status="unpriced", reason="too_few_listings")
+    lo, hi = (round(float(np.percentile(amts, q)), 2) for q in (20, 80))
+    rep = min(rows, key=lambda r: abs(r[1] - median(amts)))
+    return PriceResult(object_id=o.id, status="range", replacement=_mk("replacement", rows, currency, "new", low=lo, high=hi, rep=rep))
+
+
+class _NoBooks:
+    """Wrap a PriceSource so item searches are not restricted to the books category (if it supports it)."""
+    def __init__(self, src): self.src = src
+    def search(self, q, m, c):
+        try:
+            return self.src.search(q, m, c, books=False)
+        except TypeError:
+            return self.src.search(q, m, c)
+    def local_market(self, c): return self.src.local_market(c)
+    def fallback_markets(self): return self.src.fallback_markets()
+
+
+def run(sd: Path, source: PriceSource | None = None, fx: FX | None = None,
+        cfg: Config = CFG, deadline: float | None = None) -> None:
+    sd = Path(sd)
+    src, fx = source or deps.price_source(), fx or deps.fx()
+    meta = store.read(sd, "meta.json")
+    objs = store.read(sd, "objects.json", list[Object], default=[])
+    ufacts = store.read(sd, "user_facts.json", list[UserFact], default=[])
+    cur, country = meta["currency"], meta.get("country")
+    timed_out = []
+
+    def work(o: Object):
+        if deadline and time.time() > deadline:
+            timed_out.append(o.id)
+            return None
+        try:
+            fn = price_book if o.kind == "book" else price_item
+            return fn(o, ufacts, cur, country, src, fx, cfg)
+        except Exception as e:                  # NFR-E5: one failure => blank line + review, not a crash
+            log.warning("pricing %s failed: %s", o.id, e)
+            return PriceResult(object_id=o.id, status="unpriced", reason="price_error")
+
+    with ThreadPoolExecutor(cfg.price_workers) as ex:
+        results = [r for r in ex.map(work, objs) if r]
+    store.write(sd, "prices.json", results)
+    (store.mark_incomplete if timed_out else store.clear_incomplete)(sd, "price")

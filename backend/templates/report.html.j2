@@ -1,0 +1,43 @@
+<!doctype html><meta charset="utf-8"><title>Claim packet {{ p.sweep_id }}</title>
+<style>
+ body{font:14px/1.4 system-ui,sans-serif;margin:24px auto;max-width:1100px;padding:0 12px;color:#222}
+ table{border-collapse:collapse;width:100%;margin:8px 0 24px} th,td{border-bottom:1px solid #ddd;padding:6px 8px;text-align:left;vertical-align:top}
+ th{background:#f5f5f5} img{height:56px;border-radius:3px} .muted{color:#888} .tag{padding:1px 6px;border-radius:8px;background:#eee}
+ .needs_appraisal,.unidentified{background:#fff3cd} .kpi{display:inline-block;margin:0 24px 8px 0}.kpi b{font-size:20px;display:block}
+</style>
+<h1>Claim packet</h1>
+<p class="muted">{{ p.sweep_id }} · {{ p.country or "country ?" }} · {{ p.currency }} · generated {{ p.generated_at }}</p>
+<div>
+ <span class="kpi"><b>{{ t.book_count }}</b>books ({{ t.books_identified }} identified)</span>
+ <span class="kpi"><b>{{ "%.2f"|format(t.books_replacement_cost) }} {{ p.currency }}</b>books replacement</span>
+ <span class="kpi"><b>{{ "%.2f"|format(t.books_used_value) }} {{ p.currency }}</b>books used value</span>
+ <span class="kpi"><b>{{ t.item_count }}</b>other items</span>
+ <span class="kpi"><b>{{ t.shelf_run_m if t.shelf_run_m is not none else "—" }}</b>shelf run (m)</span>
+ <span class="kpi"><b>{{ t.excluded_from_totals }}</b>lines excluded from totals</span>
+</div>
+<h2>Room</h2>
+{% if p.room and p.room.floor_area_m2 %}
+<p>Floor {{ p.room.floor_area_m2 }} m² / {{ p.room.floor_area_ft2 }} ft² · Walls (gross) {{ p.room.wall_area_m2 }} m² / {{ p.room.wall_area_ft2 }} ft² ·
+{{ p.room.length_m }} × {{ p.room.width_m }} × {{ p.room.height_m }} m · Shelved wall {{ p.room.shelved_wall_area_m2 or "—" }} m² ·
+scale: {{ p.room.scale_method }} (confidence {{ p.room.confidence }})</p>
+<p class="muted">{{ p.room.notes|join(" · ") }}</p>
+{% else %}<p class="muted">Not measured. {{ (p.room.notes if p.room else [])|join(" · ") }}</p>{% endif %}
+<h2>Books</h2>
+<table><tr><th></th><th>ID</th><th>Title / author</th><th>Status</th><th>H × T (cm)</th><th>Replacement</th><th>Used</th></tr>
+{% for b in p.books %}<tr class="{{ b.status }}">
+ <td>{% if thumbs.get(b.id) %}<img src="{{ thumbs[b.id] }}">{% endif %}</td><td>{{ b.id }}</td>
+ <td>{{ b.title or "unidentified" }}<div class="muted">{{ b.author or "" }} {{ b.edition or "" }} {{ b.reason or "" }}</div></td>
+ <td><span class="tag">{{ b.status }}</span></td>
+ <td>{% if b.spine_height_cm %}{{ b.spine_height_cm }} × {{ b.spine_thickness_cm }} <span class="muted">±{{ b.dims_unc_cm }}</span>{% else %}—{% endif %}</td>
+ {% for pr in [b.replacement, b.used] %}<td>{% if pr %}{% if pr.amount is not none %}{{ "%.2f"|format(pr.amount) }}{% else %}{{ pr.low }}–{{ pr.high }}{% endif %}
+  <a href="{{ pr.url }}">{{ pr.source }}</a><div class="muted">{{ pr.retrieved_at }}{% if pr.converted %} · converted @{{ pr.fx_rate }} ({{ pr.fx_date }}){% endif %} · n={{ pr.count }}</div>{% else %}—{% endif %}</td>{% endfor %}
+</tr>{% endfor %}</table>
+<h2>Other items</h2>
+<table><tr><th></th><th>ID</th><th>Category</th><th>Status</th><th>Price range ({{ p.currency }})</th></tr>
+{% for i in p.items %}<tr class="{{ i.status }}"><td>{% if thumbs.get(i.id) %}<img src="{{ thumbs[i.id] }}">{% endif %}</td><td>{{ i.id }}</td>
+ <td>{{ i.category or "?" }} {{ i.material or "" }} {{ i.brand_model or "" }}</td><td><span class="tag">{{ i.status }}</span> <span class="muted">{{ i.reason or "" }}</span></td>
+ <td>{% if i.price %}{{ i.price.low }}–{{ i.price.high }} <a href="{{ i.price.url }}">{{ i.price.source }}</a> <span class="muted">{{ i.price.retrieved_at }}</span>{% else %}—{% endif %}</td></tr>{% endfor %}</table>
+<h2>Review queue ({{ p.review_queue|length }})</h2>
+<table><tr><th>Ref</th><th>Reason</th><th>Detail</th></tr>
+{% for r in p.review_queue %}<tr><td>{{ r.ref_id }}</td><td>{{ r.reason }}</td><td class="muted">{{ r.detail or "" }}</td></tr>{% endfor %}</table>
+<h2>Assumptions</h2><ul>{% for a in p.assumptions %}<li>{{ a }}</li>{% endfor %}</ul>

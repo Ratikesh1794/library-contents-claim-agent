@@ -1,0 +1,11 @@
+.venv/
+.venv-*/
+sweeps/
+cache/
+.env
+__pycache__/
+.idea/
+.DS_Store
+.pytest_cache/
+certs/
+docs/*.pdf
