@@ -138,7 +138,7 @@ async function grabJpeg(q) {
 }
 
 async function keyframeTick() {
-  if (!sweepId || finished || seq >= CONFIG.maxKeyframes || video.readyState < 2) return;
+  if (!sweepId || finished || xr || seq >= CONFIG.maxKeyframes || video.readyState < 2) return;   // paused while measuring
   const s = scoreFrame(video);
   if (s.blur < CONFIG.sharpFloor || s.diff < CONFIG.diffFloor) return;
   lastSmall = s.gray;
@@ -317,4 +317,100 @@ async function finish() {
   await api(`/api/sweeps/${sweepId}/finish`, { method: "POST" });
 }
 $("start").onclick = start; $("finish").onclick = finish;
+
+// ---------------------------------------------------------------- room measurement (WebXR, Chrome on Android)
+// The phone's AR tracking (ARCore, through the browser; nothing to install) gives points in metres. The user aims
+// the crosshair at each floor corner in order around the room, then at a point where a wall meets the ceiling.
+// Chrome needs the camera for AR, so the page's camera feed is stopped while measuring and restarted afterwards;
+// the voice call (microphone) keeps running.
+let xr = null;          // { session, refSpace, hitSource, gl, corners: [[x,y,z]], ceilingY, stage: 1 | 2, hit }
+
+async function xrSupported() {
+  try { return !!(navigator.xr && await navigator.xr.isSessionSupported("immersive-ar")); } catch (e) { return false; }
+}
+xrSupported().then((ok) => { $("measureRoom").hidden = !ok; });
+
+function xrText() {
+  const n = xr.corners.length;
+  $("xrText").textContent = xr.stage === 1
+    ? `Aim the circle at a floor corner and tap "Add point". Go around the room in order (${n} added${n < 3 ? ", need at least 3" : ""}). Then "Next".`
+    : (xr.ceilingY == null ? "Now aim at a point where a wall meets the ceiling and tap \"Add point\" (for the height), or tap \"Skip\"."
+                           : "Height point added. Tap \"Done\".");
+  $("xrNext").textContent = xr.stage === 1 ? "Next" : (xr.ceilingY == null ? "Skip" : "Done");
+  $("xrNext").disabled = xr.stage === 1 && n < 3;
+}
+
+async function startRoomMeasure() {
+  if (!sweepId || xr) return;
+  let session;
+  try {
+    session = await navigator.xr.requestSession("immersive-ar", {
+      requiredFeatures: ["hit-test"], optionalFeatures: ["dom-overlay", "local-floor"], domOverlay: { root: $("xrOverlay") } });
+  } catch (e) { addSystemLine("Room measuring could not start: " + (e.message || e.name)); return; }
+  stream?.getVideoTracks().forEach((t) => { t.stop(); stream.removeTrack(t); });   // AR needs the camera
+  const gl = document.createElement("canvas").getContext("webgl", { xrCompatible: true });
+  await session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl) });
+  let refSpace;
+  try { refSpace = await session.requestReferenceSpace("local-floor"); } catch (e) { refSpace = await session.requestReferenceSpace("local"); }
+  const hitSource = await session.requestHitTestSource({ space: await session.requestReferenceSpace("viewer") });
+  xr = { session, refSpace, hitSource, gl, corners: [], ceilingY: null, stage: 1, hit: null };
+  $("xrOverlay").hidden = false; xrText();
+  session.addEventListener("select", addXrPoint);            // tapping the AR view also adds a point
+  session.addEventListener("end", onXrEnd);
+  session.requestAnimationFrame(onXrFrame);
+}
+
+function onXrFrame(time, frame) {
+  if (!xr) return;
+  frame.session.requestAnimationFrame(onXrFrame);
+  const layer = frame.session.renderState.baseLayer;           // nothing to draw: the browser shows the camera
+  xr.gl.bindFramebuffer(xr.gl.FRAMEBUFFER, layer.framebuffer);
+  xr.gl.clearColor(0, 0, 0, 0); xr.gl.clear(xr.gl.COLOR_BUFFER_BIT);
+  const hits = frame.getHitTestResults(xr.hitSource);
+  const pose = hits.length ? hits[0].getPose(xr.refSpace) : null;
+  xr.hit = pose ? [pose.transform.position.x, pose.transform.position.y, pose.transform.position.z] : null;
+  $("xrReticle").classList.toggle("ok", !!xr.hit);
+}
+
+function addXrPoint() {
+  if (!xr) return;
+  if (!xr.hit) { $("xrText").textContent = "No surface under the circle yet. Move the phone slowly over the floor or wall, then try again."; return; }
+  if (xr.stage === 1) xr.corners.push(xr.hit.map((v) => +v.toFixed(4)));
+  else xr.ceilingY = +xr.hit[1].toFixed(4);
+  xrText();
+}
+
+async function finishRoomMeasure() {
+  const body = JSON.stringify({ corners: xr.corners, ceiling_y: xr.ceilingY });
+  const id = sweepId, session = xr.session;
+  try {
+    const r = await api(`/api/sweeps/${id}/room/corners`, { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    if (!r.ok) addSystemLine("Room measurement was not saved (server said " + r.status + ").");
+  } catch (e) { addSystemLine("Room measurement was not saved: " + e.message); }
+  session.end();                                              // the server's result arrives as a status line
+}
+
+async function onXrEnd() {
+  try { xr?.hitSource.cancel(); } catch (e) {}
+  xr = null; $("xrOverlay").hidden = true;
+  if (finished) return;
+  try {                                                       // give the camera back to the sweep
+    const v = await navigator.mediaDevices.getUserMedia({ video: {
+      facingMode: "environment", width: { ideal: CONFIG.video.width }, height: { ideal: CONFIG.video.height }, frameRate: { ideal: 30, max: 30 } } });
+    stream.addTrack(v.getVideoTracks()[0]); video.srcObject = stream; await video.play();
+  } catch (e) { addSystemLine("The camera could not restart after measuring: " + e.name); }
+}
+
+// Buttons on the overlay must not also count as taps on the AR view.
+$("xrOverlay").querySelector(".xrpanel").addEventListener("beforexrselect", (e) => e.preventDefault());
+$("measureRoom").onclick = startRoomMeasure;
+$("xrAdd").onclick = addXrPoint;
+$("xrUndo").onclick = () => {
+  if (!xr) return;
+  if (xr.stage === 2) { if (xr.ceilingY != null) xr.ceilingY = null; else xr.stage = 1; }   // back to the corners step
+  else xr.corners.pop();
+  xrText();
+};
+$("xrNext").onclick = () => { if (!xr) return; if (xr.stage === 1) { xr.stage = 2; xrText(); } else finishRoomMeasure(); };
+$("xrCancel").onclick = () => xr?.session.end();
 if (!TOKEN) $("err").textContent = "Open this page from the QR code or link the server printed (it includes your access token).";

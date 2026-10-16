@@ -15,7 +15,7 @@ Needs Python 3.12 and an OpenAI API key.
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements.txt
 source .venv/bin/activate
-pytest                     # 76 offline tests; every external service is faked
+pytest                     # 82 offline tests; every external service is faked
 cp .env.example .env       # then fill in OPENAI_API_KEY (see "Configuration" below)
 ```
 
@@ -37,6 +37,15 @@ Troubleshooting:
 - *Camera denied*: the page must be opened over `https://`; allow camera and mic in the browser's site settings.
 - *No voice*: tap anywhere on the page once; the Transcript tab shows "Voice error / reconnecting" lines if OpenAI fails.
 - *Noisy room*: tap "Noisy room? Use hold-to-talk" under the mic button.
+
+### Measuring the room (browser, Android Chrome)
+
+During a sweep, Chrome on an ARCore-capable Android phone shows **📐 Measure the room**. It opens an AR view in the
+browser (WebXR; nothing to install): aim the circle at each floor corner **in order around the room** and tap
+*Add point*, then *Next*, then aim at a point where a wall meets the ceiling (for the height) or *Skip*. The phone's
+motion tracking gives the points in metres → floor area, length, width, height and wall area (m² and ft²).
+While measuring, the page's camera pauses (AR needs it); the voice agent keeps running. iPhone Safari has no WebXR
+AR, so the button doesn't appear there and room size stays blank (review queue) unless measured another way.
 
 ### Re-run on saved footage (no phone)
 
@@ -151,7 +160,7 @@ against real OpenAI.
 - Without eBay keys every price is blank.
 - Item counts after tracking have not yet been checked on a sweep captured with the new camera path.
 
-**Not built yet:** room reconstruction and markerless scale (room fields stay blank and go to review), room
+**Not built yet:** room size on iPhone (WebXR room measuring is Android Chrome only), markerless spine scale, room
 fallbacks, marker-plane rectification and per-shelf scale, the Coach's "missed shelf" map, art "original or print?"
 questions, linking spoken references ("the book on the left") to an object, a second price source, item dimensions.
 Details in [`docs/low-level-design.md` §16](docs/low-level-design.md).

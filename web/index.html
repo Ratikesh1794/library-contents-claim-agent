@@ -52,6 +52,7 @@
       <button id="mute" class="btn icon" aria-pressed="false">🎙 Mute</button>
     </div>
     <button id="talkMode" class="linkbtn">Noisy room? Use hold-to-talk</button>
+    <button id="measureRoom" class="btn wide" hidden>📐 Measure the room (floor corners)</button>
     <audio id="agentAudio" autoplay playsinline></audio>
 
     <div class="tabs" role="tablist">
@@ -68,6 +69,20 @@
 
     <div class="footer"><button id="finish" class="btn danger">Finish &amp; build packet</button></div>
   </section>
+
+  <!-- room measurement overlay, shown over the AR camera during a WebXR session (dom-overlay) -->
+  <div id="xrOverlay" class="xr" hidden>
+    <div id="xrReticle" class="reticle" aria-hidden="true"></div>
+    <div class="xrpanel">
+      <p id="xrText" role="status" aria-live="polite"></p>
+      <div class="xrbuttons">
+        <button id="xrAdd" class="btn primary">Add point</button>
+        <button id="xrUndo" class="btn">Undo</button>
+        <button id="xrNext" class="btn">Next</button>
+        <button id="xrCancel" class="btn">Cancel</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 3. done -->
   <section id="done" class="card" hidden>

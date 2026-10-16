@@ -87,3 +87,14 @@ input{font:inherit;color:var(--text);background:var(--bg);border:1px solid var(-
 h3{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:6px 0}
 .footer{padding-top:8px}.footer .btn{width:100%}
 @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+
+/* WebXR room measurement (dom-overlay over the AR camera) */
+.btn.wide{width:100%;margin:2px 0 8px}
+.xr{position:fixed;inset:0;z-index:50;pointer-events:none;color:#fff}
+.xr .reticle{position:absolute;left:50%;top:42%;width:44px;height:44px;margin:-22px 0 0 -22px;border:3px solid #fff;border-radius:50%;opacity:.5}
+.xr .reticle::after{content:"";position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-3px 0 0 -3px;border-radius:50%;background:#fff}
+.xr .reticle.ok{border-color:var(--good);opacity:1}
+.xr .xrpanel{position:absolute;left:0;right:0;bottom:0;padding:14px 16px calc(14px + env(safe-area-inset-bottom));background:rgba(0,0,0,.72);pointer-events:auto}
+.xr p{margin:0 0 10px;font-size:15px}
+.xr .xrbuttons{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.xr .xrbuttons .btn{padding:10px 6px;font-size:14px}

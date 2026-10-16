@@ -139,6 +139,7 @@ IDs are referenced by tests and the results sheet.
 | D16 | **Dedupe by frame-to-frame tracking** (homography between overlapping keyframes). | Linking by identified neighbours fails when few books are identified (a real sweep turned 97 sightings into 97 books). |
 | D17 | **Prompts are code constants in one package** (`backend/prompts/`); **mini models by default.** | One place to change what any model is told; lower cost per sweep. |
 | D18 | **Two voice engines behind one interface** (`VOICE_ENGINE`). Default `pipecat`: phone → laptop over WebRTC (same Wi-Fi), RNNoise, then a Silero VAD with a **volume gate** decides when the user speaks; OpenAI's own turn detection is off. Fallback `direct`: phone ↔ OpenAI Realtime, server attached sideband. | Background voices (a TV) made OpenAI's turn detection start turns and cut the agent off. The person holding the phone is much louder than a TV across the room: measured, a gate at 0.72 ignored a TV ~20 dB quieter while still hearing the user. `direct` stays for networks where the phone can't reach the laptop. |
+| D20 | **Room size from WebXR in the browser** (Chrome on ARCore-capable Android): the user aims at the floor corners in order, then a wall/ceiling point; hit tests give metres. No native app. | Users can't be asked to print a marker or install an app; the phone's own AR tracking is metric. Trade-offs: a short measuring step within the sweep (camera feed pauses), and iPhone Safari has no WebXR AR. |
 | D19 | **Analyse only what is new.** A keyframe that mostly shows the last analysed frame copies its results; the live worker always works on the newest frame; the spine-read call also says whether a crop is a book at all. | Cost and latency scale with model calls, not frames; a stale queue made coach tips lag; non-books (perfume boxes) were being counted as books. |
 | D14 | **Phone is the capture device; the laptop runs the server.** The phone opens the web app in its browser over HTTPS (tunnel or local HTTPS). Laptop webcam is not the primary camera. | Walking a room needs a handheld rear camera; browsers allow camera/mic only on HTTPS, so access topology is part of the design. |
 
@@ -373,6 +374,8 @@ Fallbacks, in order: marker-scaled plane fit from single-view homography on floo
 | Failure | Behaviour |
 |---|---|
 | Marker not visible on a shelf | Fall back to standard-format heuristic; lower confidence; add to review queue |
+| Room measuring not available (iPhone, non-AR phone) or skipped | Room fields blank, `room_scale_missing` in the review queue |
+| Corners tapped out of order | Outline crosses itself → convex hull used, noted on the room line |
 | 3D reconstruction fails or is implausible | Room dims from marker-scaled plane fits; flag low confidence; review queue |
 | Catalogue API down / no match | `unidentified`, never a guessed title |
 | Spine shows a title but no author | `unidentified` (`author_not_visible`), no catalogue call; counted and measured |

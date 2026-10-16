@@ -1,5 +1,8 @@
 """MEASURE-ROOM stage: frames  ->  room.json
 
+First choice: room corners measured in the browser with WebXR (room_corners.json, see stages/room_corners.py).
+Otherwise the reconstruction path below.
+
   Reconstructor (adapter, GPU) -> unscaled points + up vector + marker side in model units
   -> scale = marker_side_cm / median(marker side in model units)
   -> floor / ceiling heights, floor polygon, wall area      (pure math below, unit-tested)
@@ -23,6 +26,7 @@ from backend.core import store
 from backend.config import CFG, Config
 from backend.ports import Reconstruction, Reconstructor
 from backend.schemas import Frame, Room
+from backend.stages.room_corners import room_from_corners
 
 FT2_PER_M2 = 10.7639
 
@@ -58,6 +62,10 @@ def room_from_points(points: np.ndarray, up: np.ndarray, scale: float, floor_ban
 
 def run(sd: Path, reconstructor: Reconstructor | None = None, cfg: Config = CFG) -> None:
     sd = Path(sd)
+    corners = store.read(sd, "room_corners.json", dict, default=None)
+    if corners and len(corners.get("corners", [])) >= 3:          # measured in the browser with WebXR: metric
+        store.write(sd, "room.json", room_from_corners(corners["corners"], corners.get("ceiling_y")))
+        return
     frames = store.read(sd, "frames.json", list[Frame], default=[])
     rec: Reconstruction | None = None
     try:

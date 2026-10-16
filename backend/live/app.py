@@ -15,6 +15,7 @@ import asyncio
 import hmac
 import json
 import logging
+import math
 import os
 import secrets
 import time
@@ -32,6 +33,7 @@ from backend import deps, pipeline
 from backend.core import store
 from backend.live import agent, voice_pipecat
 from backend.stages import dedupe, identify, track
+from backend.stages.room_corners import room_from_corners
 from backend.live.coach import Coach
 from backend.config import CFG, ROOT, Config
 from backend.schemas import Frame, Sighting, UserFact
@@ -251,6 +253,28 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
             store.write(s.sd, "frames.json", frames + [f])
         await s.frame_q.put(f)
         return {"ok": True, "frame_id": fid}
+
+    @app.post("/api/sweeps/{sweep_id}/room/corners", dependencies=[Depends(require_token)])
+    async def room_corners(sweep_id: str, request: Request):
+        """Floor corners (and optional wall/ceiling point) measured with WebXR in the browser: metres, y up."""
+        limits.check((sweep_id, "room"), cfg.rate_finish)
+        try:
+            data = await request.json()
+            corners = [[float(v) for v in c] for c in data["corners"]]
+            ceiling = data.get("ceiling_y")
+            ceiling = None if ceiling is None else float(ceiling)
+        except (ValueError, KeyError, TypeError):
+            raise HTTPException(400, "expected {corners: [[x, y, z], ...], ceiling_y: number|null}")
+        if not 3 <= len(corners) <= 50 or any(len(c) != 3 or not all(map(math.isfinite, c)) for c in corners):
+            raise HTTPException(400, "need 3-50 corners of 3 finite numbers")
+        s = session_for(sweep_id)
+        store.write(s.sd, "room_corners.json", {"corners": corners, "ceiling_y": ceiling})
+        room = room_from_corners(corners, ceiling)
+        text = f"Room measured: floor {room.floor_area_m2} m² ({room.length_m} × {room.width_m} m)" + \
+               (f", height {room.height_m} m" if room.height_m else "")
+        await s.down.put({"type": "status", "text": text})
+        await s.inject.put(f"STATUS {text}")
+        return room.model_dump()
 
     @app.post("/api/sweeps/{sweep_id}/voice", dependencies=[Depends(require_token)])
     async def start_voice(sweep_id: str, request: Request):

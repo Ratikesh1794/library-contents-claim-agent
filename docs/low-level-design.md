@@ -296,6 +296,19 @@ Tests: an unread book tracked over 5 frames counts 1; one good read names a trac
 5. **Areas.** `floor_area = polygon area`. `wall_area = Σ wall_length × height` (gross, openings not subtracted; stated in the report). `shelved_wall_area = Σ shelf_width × shelf_height` from shelf row extents projected on their walls.
 6. **Output** m² and ft² (×10.7639), `scale_method`, `confidence`, per-wall table.
 
+### 8.3a Room from WebXR corners (built; Chrome on ARCore-capable Android)
+
+`web/app.js` → "Measure the room": `navigator.xr.requestSession("immersive-ar", {requiredFeatures: ["hit-test"],
+optionalFeatures: ["dom-overlay", "local-floor"]})`, reference space `local-floor` (fallback `local`), a hit-test
+source on the viewer ray drives a centre crosshair; *Add point* (or tapping the AR view, `select`) records the hit in
+metres. Step 1: floor corners in order (≥ 3); step 2: one point where a wall meets the ceiling, or skip. The page's
+video track is stopped during the session (AR needs the camera) and re-acquired after; keyframes pause; the WebRTC
+voice call keeps the microphone. `POST /api/sweeps/{id}/room/corners {corners: [[x,y,z]…], ceiling_y}` →
+`room_corners.json`; `measure_room` prefers it (`stages/room_corners.py`): shoelace floor area on (x, z),
+min-area-rect length/width, height = ceiling y − mean floor y (ignored if < 1.5 m), wall area = perimeter × height
+(gross). An outline that crosses itself (taps out of order) → convex hull, noted. The button is shown only when
+`isSessionSupported("immersive-ar")` is true; iPhone Safari has no WebXR AR. Not yet tried on a phone.
+
 ### 8.4 Room fallbacks (in order)
 
 1. Floor marker + floor homography → floor polygon from visible floor boundary; height from a vertical marker or known object.
@@ -429,6 +442,7 @@ Changes from the original design, and why:
 | Area | Design said | Built | Why |
 |---|---|---|---|
 | Voice | Gemini Live; PCM audio over our WebSocket; low-res video to the model | OpenAI Realtime over **WebRTC**; default engine Pipecat on the laptop (RNNoise + volume-gated VAD), `direct` phone↔OpenAI as fallback; the agent does not see video | Over our WebSocket the agent heard itself and the room; with OpenAI's own turn detection a background TV started turns |
+| Room size | Multi-view reconstruction scaled by a marker | WebXR corner measuring in the browser (Android Chrome); reconstruction still a stub | Metric from the phone's own tracking, no app or marker; iPhone not covered |
 | Identification | Weighted fuzzy score ≥ `accept_T` | Title **and** author must match one record; edition/ISBN only when verified | The old rule accepted "Dune Messiah" for "Dune" and filled in an unseen author and an unverified ISBN |
 | Keyframes | `ImageCapture.takePhoto` stills | Video frames, encoded in a Web Worker | takePhoto took ~2.6 s per frame and froze the preview |
 | Quality | Raw Laplacian variance, mean luma | Fixed-size blur, 99th-percentile darkness | The old gates rejected 78/97 readable crops on a real sweep |
