@@ -2,68 +2,114 @@
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sweep Dashboard</title>
+<title>Contents Claim · Dashboard</title>
 <link rel="stylesheet" href="/static/dashboard.css">
 </head>
 <body>
-<header class="bar">
-  <div class="brand"><span aria-hidden="true">📚</span> Contents Claim <span class="muted">· Dashboard</span></div>
-  <label class="pick">Sweep
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true">CC</span>
+    <div><div class="product">Contents Claim</div><div class="tagline">Sweep dashboard</div></div>
+  </div>
+  <div class="picker">
     <select id="sweepPick" aria-label="Choose a sweep"></select>
-  </label>
-  <label class="follow"><input type="checkbox" id="follow" checked> Follow new sweeps</label>
+    <label class="switch"><input type="checkbox" id="follow" checked><span></span>Follow new sweeps</label>
+  </div>
   <div class="spacer"></div>
-  <button id="showQr" class="btn small">📱 Phone QR</button>
-  <span id="pillPhone" class="pill" data-s="off"><i></i><span>Phone offline</span></span>
-  <span id="pillVoice" class="pill" data-s="off"><i></i><span>Voice idle</span></span>
-  <span id="pillConn" class="pill" data-s="warn"><i></i><span>Connecting…</span></span>
+  <div class="status" aria-label="Connection status">
+    <span id="pillPhone" class="chip" data-s="off"><i></i><span>Phone offline</span></span>
+    <span id="pillVoice" class="chip" data-s="off"><i></i><span>Voice idle</span></span>
+    <span id="pillConn" class="chip" data-s="warn"><i></i><span>Connecting…</span></span>
+  </div>
+  <button id="showQr" class="btn ghost" title="Show the phone's QR code">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>Connect phone
+  </button>
 </header>
 
 <main>
-  <section class="kpis" aria-label="Headline numbers">
-    <div class="kpi"><b id="kBooks">0</b><span>books</span></div>
-    <div class="kpi ok"><b id="kIdent">0</b><span>identified</span></div>
-    <div class="kpi warn"><b id="kUnread">0</b><span>unidentified</span></div>
-    <div class="kpi"><b id="kItems">0</b><span>other items</span></div>
-    <div class="kpi"><b id="kFrames">0</b><span id="kFramesSub">frames</span></div>
-    <div class="kpi"><b id="kRoom">—</b><span id="kRoomSub">room (not measured)</span></div>
-    <div class="kpi"><b id="kValue">—</b><span id="kValueSub">replacement value</span></div>
-  </section>
-
-  <section id="connect" class="card connect" hidden>
-    <div id="qr" class="qr" aria-label="QR code for the phone"></div>
-    <div class="connecttext">
-      <h2>Connect your phone</h2>
-      <p>Scan this with the phone's camera, open the link, allow camera and microphone, then tap <b>Start sweep</b>.
-         This page fills in as the phone pans the shelves.</p>
-      <p class="link"><span id="phoneUrl"></span> <button id="copyUrl" class="btn small">Copy link</button></p>
-      <p id="httpsWarn" class="warn" hidden>This link is not HTTPS, so phones won't allow the camera. Start the server with
-         <code>scripts/run.sh</code> (it opens a secure tunnel).</p>
-      <button id="hideQr" class="btn small">Hide</button>
-    </div>
-  </section>
-
-  <section id="packet" class="card packet" hidden>
+  <section class="hero">
     <div>
-      <h2>Claim packet ready</h2>
-      <p id="pSummary" class="muted"></p>
-      <div id="pTotals" class="totals"></div>
+      <div class="eyebrow" id="heroEyebrow">No sweep yet</div>
+      <h1 id="heroTitle">Waiting for the phone</h1>
+      <div class="meta" id="heroMeta"></div>
     </div>
-    <div class="actions">
+    <div class="hero-actions" id="packetActions" hidden>
       <a id="pReport" class="btn primary" target="_blank" rel="noopener">Open report</a>
       <a id="pJson" class="btn" target="_blank" rel="noopener">Packet JSON</a>
     </div>
   </section>
 
-  <div class="cols">
+  <section id="connect" class="card connect" hidden>
+    <div id="qr" class="qr" aria-label="QR code for the phone"></div>
+    <div class="connect-body">
+      <h2>Connect your phone</h2>
+      <ol class="steps">
+        <li>Scan the code with the phone's camera and open the link.</li>
+        <li>Allow camera and microphone, then tap <b>Start sweep</b>.</li>
+        <li>Pan the shelves slowly. Records appear here as they're found.</li>
+      </ol>
+      <div class="linkrow"><code id="phoneUrl"></code><button id="copyUrl" class="btn small">Copy link</button></div>
+      <p id="httpsWarn" class="note warn" hidden>This link isn't HTTPS, so phones won't allow the camera. Start the server with <code>scripts/run.sh</code> (it opens a secure tunnel).</p>
+    </div>
+    <button id="hideQr" class="iconbtn" aria-label="Hide">×</button>
+  </section>
+
+  <section id="packet" class="card packet" hidden>
+    <div class="packet-head">
+      <span class="badge success">Packet ready</span>
+      <p id="pSummary"></p>
+    </div>
+    <div id="pTotals" class="totals"></div>
+  </section>
+
+  <section class="kpis" aria-label="Headline numbers">
+    <article class="kpi">
+      <header><span class="ico books"></span>Books</header>
+      <b id="kBooks">0</b>
+      <div class="bar" aria-hidden="true"><span id="kIdentBar"></span></div>
+      <small id="kIdentSub">0 identified</small>
+    </article>
+    <article class="kpi">
+      <header><span class="ico warn"></span>Unidentified</header>
+      <b id="kUnread">0</b>
+      <small>counted and measured, not named</small>
+    </article>
+    <article class="kpi">
+      <header><span class="ico items"></span>Other items</header>
+      <b id="kItems">0</b>
+      <small>furniture, electronics, decor…</small>
+    </article>
+    <article class="kpi">
+      <header><span class="ico frames"></span>Frames</header>
+      <b id="kFrames">0</b>
+      <small id="kFramesSub">0 analysed</small>
+    </article>
+    <article class="kpi">
+      <header><span class="ico room"></span>Room</header>
+      <b id="kRoom">—</b>
+      <small id="kRoomSub">not measured</small>
+    </article>
+    <article class="kpi">
+      <header><span class="ico value"></span>Replacement value</header>
+      <b id="kValue">—</b>
+      <small id="kValueSub">after the packet is built</small>
+    </article>
+  </section>
+
+  <div class="layout">
     <section class="card records">
-      <div class="tabs" role="tablist">
-        <button role="tab" data-tab="books" aria-selected="true">Books <span id="cBooks" class="badge">0</span></button>
-        <button role="tab" data-tab="items" aria-selected="false">Other items <span id="cItems" class="badge">0</span></button>
-        <button role="tab" data-tab="review" aria-selected="false">Review queue <span id="cReview" class="badge">0</span></button>
+      <div class="card-head">
+        <div class="tabs" role="tablist">
+          <button role="tab" data-tab="books" aria-selected="true">Books <span id="cBooks" class="count">0</span></button>
+          <button role="tab" data-tab="items" aria-selected="false">Other items <span id="cItems" class="count">0</span></button>
+          <button role="tab" data-tab="review" aria-selected="false">Review queue <span id="cReview" class="count">0</span></button>
+        </div>
       </div>
       <div class="toolbar">
-        <input id="search" type="search" placeholder="Search title, author, category…" aria-label="Search records">
+        <div class="search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+          <input id="search" type="search" placeholder="Search title, author, category, reason…" aria-label="Search records">
+        </div>
         <div id="filters" class="seg" role="group" aria-label="Filter books">
           <button data-f="all" aria-pressed="true">All</button>
           <button data-f="identified" aria-pressed="false">Identified</button>
@@ -72,21 +118,34 @@
       </div>
       <div class="tablewrap">
         <table id="table"><thead></thead><tbody></tbody></table>
-        <p id="empty" class="empty">Waiting for the phone to start a sweep. Scan the QR code from the terminal.</p>
+        <div id="empty" class="empty">
+          <div class="empty-ico" aria-hidden="true"></div>
+          <p id="emptyText">No records yet.</p>
+        </div>
       </div>
     </section>
 
     <aside class="side">
       <section class="card">
-        <h2>Live activity</h2>
-        <ol id="feed" class="feed" aria-live="polite"></ol>
+        <div class="card-head"><h2>Live activity</h2><span class="hint" id="feedCount"></span></div>
+        <ol id="feed" class="timeline" aria-live="polite"></ol>
+        <p id="feedEmpty" class="empty small">Events appear here while the phone is sweeping.</p>
       </section>
       <section class="card">
-        <h2>Conversation</h2>
-        <div id="convo" class="convo" role="log" aria-live="polite"><p class="empty">Nothing said yet.</p></div>
+        <div class="card-head"><h2>Conversation</h2></div>
+        <div id="convo" class="convo" role="log" aria-live="polite"></div>
+        <p id="convoEmpty" class="empty small">The voice agent's conversation appears here.</p>
       </section>
     </aside>
   </div>
 </main>
+
+<aside id="drawer" class="drawer" hidden aria-label="Record details">
+  <div class="drawer-head"><h2 id="dTitle">Record</h2><button id="dClose" class="iconbtn" aria-label="Close">×</button></div>
+  <img id="dImg" alt="">
+  <dl id="dFields"></dl>
+</aside>
+<div id="scrim" class="scrim" hidden></div>
+
 <script src="/static/dashboard.js"></script>
 </body></html>
