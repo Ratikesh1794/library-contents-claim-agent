@@ -323,6 +323,9 @@ Code decides what to say and when; the agent speaks the sentence word for word a
 
 | Topic | Trigger (computed in code) | Says (examples) |
 |---|---|---|
+| `setup:focus` | First thing after the greeting (the phone said hello). Done when the phone's centre patch stays sharp for ~1 s (`focusMin`, `focusSteady` in `web/app.js`) | "First, let's get the camera sharp. Point it at the nearest shelf and hold still for two seconds." |
+| `setup:room` | Camera is sharp and the phone supports WebXR AR. Done when the floor corners are posted | "Sharp, good. Now the room size: tap Measure the room, aim the circle at each floor corner in turn, and tap Add point." |
+| `setup:start` | Room measured, or no AR on this phone (iPhone Safari), or a step asked twice with no answer (it moves on) | "Room measured: 12 square metres. Now walk the room once, slowly, shelf by shelf." / "...This phone cannot measure the room, so the room size stays blank..." |
 | `slow` | The phone rejected several frames in a row as too blurry and told the server | "Slow down a little. Pause on each shelf for a second." Then, if it continues: "Still too blurry. Stop for a moment and hold the phone still." |
 | `book:*` | A book in view stays unreadable for 2 s. The cause comes from the failed crop (`too_far`, `blur`/`low_confidence`, `glare`, `too_dark`, `blocked`, `partial`); the position from where it sits in the frame | "Hold steady on the book on the left for a second." / "Move a bit closer to the books on the right." / "Tilt the phone a little to cut the glare on the book at the top." / "Pan a little further so the book on the left is fully in view." |
 | `giveup` | A book was asked about twice | "I could not read the book on the left. I will note it and move on." |
@@ -331,6 +334,7 @@ Code decides what to say and when; the agent speaks the sentence word for word a
 | `idle` | 15 s with no new book and nothing in view needing attention (a timer, so it also works when the user holds still and no frames arrive) | "That area looks done. Move on to the next shelf, or say finish when you have covered everything." Then, after a minute: "Nothing new for a while. Say finish when you are done." |
 
 Behaviour:
+- Setup comes first; book, blur, progress and idle messages stay silent until it is done.
 - One message at a time, at least 6 s between any two, a cooldown per topic, silence for 2 s after the user speaks. The same topic again gets firmer wording.
 - Failures the user cannot fix (`author_not_visible`, `no_catalogue_match`, `ambiguous_match`, `stack_hidden`) are never mentioned.
 - Max 2 asks per book, then one "I will note it and move on" and the book is left alone. "Skip this shelf" silences that row of the current view.

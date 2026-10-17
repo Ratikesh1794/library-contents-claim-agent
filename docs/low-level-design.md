@@ -159,7 +159,7 @@ Inbound app-state messages (injected by the server): `GUIDE{ask}` (said word for
 
 System prompt rules (short, testable; full text in `backend/prompts/agent.py`):
 1. You are a capture coach and conversation partner. You never read titles, state prices, or give measurements yourself.
-2. Greet; confirm country and currency; explain the sweep in two sentences.
+2. Greet; confirm country and currency. The sweep is explained by the `setup:*` GUIDE messages (camera focus, room size, then "walk the room"). The phone starts setup with `{"type":"setup","step":"hello","ar":bool}` and reports `focused` over `/ws/live`; the room step ends when `/room/corners` is posted.
 3. On `CAPTURE_ISSUE` or `GUIDE`, say its `ask` word for word in one short sentence. Do not add detail.
 4. On `QUESTION`, ask it verbatim once; on the user's answer call `record_user_fact`.
 5. Never ask the user to pull books out, open them, rearrange shelves, scan barcodes, or photograph items one by one.
