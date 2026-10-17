@@ -17,7 +17,7 @@ IDs are referenced by tests and the results sheet.
 | ID | Requirement |
 |---|---|
 | FR-L1 | Browser app streams mic audio and camera video to a live voice agent; agent replies by voice. |
-| FR-L2 | Agent opens by confirming country and currency, and explains the sweep in 1-2 sentences. |
+| FR-L2 | Agent opens by asking for (or confirming, if typed on the start screen) the country and currency; nothing is assumed. Then it leads setup: camera focus, room size, then the sweep. |
 | FR-L3 | Agent detects blur, glare, occlusion, and missed shelves during the sweep and tells the user in the moment. |
 | FR-L4 | Agent asks short questions video cannot answer (art: original or print? signed?). |
 | FR-L5 | User can interrupt and correct by voice ("first edition", "skip that shelf"). Corrections update the inventory. |

@@ -8,12 +8,13 @@ const q = (o) => new URLSearchParams({ ...o, t: TOKEN }).toString();
 const api = (path) => fetch(path, { headers: { "X-Sweep-Token": TOKEN } });
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const clock = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
-const money = (v, cur) => (v == null ? "—" : new Intl.NumberFormat(undefined, { style: "currency", currency: cur || "USD", maximumFractionDigits: 0 }).format(v));
+const money = (v, cur) => (v == null ? "—" : cur ? new Intl.NumberFormat(undefined, { style: "currency", currency: cur, maximumFractionDigits: 0 }).format(v)
+                                                   : Math.round(v).toLocaleString());     // currency not given yet
 const words = (s) => String(s || "").replace(/_/g, " ");
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const crop = (r, w) => `/api/sweeps/${sweepId}/crop?${q({ f: r.frame, b: r.bbox.join(","), w })}`;
 
-let sweepId = null, ws = null, follow = true, currency = "USD", phoneOnline = false, qrDismissed = false, sweeps = [];
+let sweepId = null, ws = null, follow = true, currency = null, phoneOnline = false, qrDismissed = false, sweeps = [];
 let inv = { books: [], items: [], counts: {} }, review = [], tab = "books", filter = "all", seenIds = new Set();
 let sort = { key: null, dir: 1 };
 
@@ -81,7 +82,7 @@ function connect() {
 function handle(m) {
   switch (m.type) {
     case "hello":
-      currency = m.meta?.currency || "USD"; hero();
+      currency = m.meta?.currency || null; hero();
       pill("pillPhone", m.phone ? "Camera connected" : "Camera offline", m.phone ? "ok" : "off");
       phoneOnline = m.phone; showConnect();
       if (m.finished) loadPacket();

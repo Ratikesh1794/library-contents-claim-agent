@@ -34,7 +34,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend import deps, pipeline
 from backend.stages.book_tracker import BookTracker
-from backend.core import store
+from backend.core import locale, store
 from backend.live import agent, voice_pipecat
 from backend.stages import dedupe, identify, track
 from backend.stages.room_corners import room_from_corners
@@ -112,6 +112,14 @@ class Hooks:
             if self.s.tracker and self.s.guide:
                 self.s.guide.skip(self.s.tracker, self.s.last_frame_id, region)
             self.on_fact(region, "skip", None)
+
+    def on_locale(self, country: str, currency: str) -> None:
+        meta = store.read(self.s.sd, "meta.json")
+        store.write(self.s.sd, "meta.json", {**meta, "country": country, "currency": currency})
+        self.s.down.put_nowait({"type": "locale", "country": country, "currency": currency})
+        if self.s.guide:
+            self.s.guide.locale_known = True
+            self.s.guide.setup_t = self.s.now()            # first setup ask comes setup_first_s after the agent confirms
 
     async def on_finish(self):
         await self._finish(self.s)
@@ -266,6 +274,12 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
     async def finish(s: SweepSession):
         if s.finished:
             return
+        meta = store.read(s.sd, "meta.json")
+        if not (meta.get("country") and meta.get("currency")):          # prices need both; never assume one
+            ask = "Before I build the packet: which country are you in, and which currency should the claim use?"
+            await s.down.put({"type": "status", "text": "Country and currency are needed before the packet can be built."})
+            await guide_say(s, {"type": "GUIDE", "key": "locale", "ask": ask})
+            return
         s.finished = True
         await s.down.put({"type": "status", "text": "Building your claim packet…"})
         try:
@@ -351,7 +365,8 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
     async def create_sweep(request: Request):
         limits.check(("new_sweep",), cfg.rate_new_sweep)
         body = await request.json() if await request.body() else {}
-        sd = store.new_sweep(body.get("country"), body.get("currency") or "USD", cfg.sweeps_dir, device=body.get("device"))
+        country, currency = locale.clean(body.get("country"), body.get("currency"))   # blank: the agent asks the user
+        sd = store.new_sweep(country, currency, cfg.sweeps_dir, device=body.get("device"))
         session_for(sd.name)
         return {"sweep_id": sd.name}
 
@@ -484,6 +499,8 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
                 except ValueError:
                     continue
                 if isinstance(msg, dict) and msg.get("type") == "setup":      # hello {ar} / focused (camera steady and sharp)
+                    meta = store.read(s.sd, "meta.json")
+                    s.guide.locale_known = bool(meta.get("country") and meta.get("currency"))
                     s.guide.setup_event(s.now(), str(msg.get("step")), ar=bool(msg.get("ar")))
                     m = s.guide.setup_tick(s.now(), s.last_user_speech_t)
                     if m:

@@ -58,7 +58,7 @@ AR, so the button doesn't appear there and room size stays blank (review queue) 
 ### Re-run on saved footage (no phone)
 
 ```bash
-python -m backend.ingest clip.mp4 --country US --currency USD    # video or photo folder -> sweeps/<id>
+python -m backend.ingest clip.mp4 --country GB --currency GBP    # video or photo folder -> sweeps/<id>
 python -m backend.pipeline sweeps/<id>                           # whole pipeline
 python -m backend.pipeline sweeps/<id> --only price              # one stage (stages are file-in/file-out)
 python -m backend.eval sweeps/<id> ground_truth/                 # pass-bar table (CSV format in backend/eval.py)

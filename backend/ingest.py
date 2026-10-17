@@ -1,7 +1,7 @@
 """INGEST: turn saved footage (a video file or a folder of JPEGs) into a sweep dir, so the whole
 pipeline can be run and re-run offline without the phone.   (NFR-E1)
 
-    python -m backend.ingest clip.mp4 --country US --currency USD
+    python -m backend.ingest clip.mp4 --country GB --currency GBP
     python -m backend.pipeline sweeps/<printed id>
 Keeps ~2 frames/s, drops blurry ones and near-duplicates, same idea as the browser's keyframe filter.
 """
@@ -19,7 +19,7 @@ from backend.config import CFG
 from backend.schemas import Frame
 
 
-def ingest(src: Path, country: str | None, currency: str, fps_keep: float = 2.0, blur_floor: float = 30.0,
+def ingest(src: Path, country: str, currency: str, fps_keep: float = 2.0, blur_floor: float = 30.0,
            root: Path | None = None) -> Path:
     sd = store.new_sweep(country, currency, root, source=str(src))
     frames: list[Frame] = []
@@ -58,8 +58,8 @@ def ingest(src: Path, country: str | None, currency: str, fps_keep: float = 2.0,
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("src", type=Path)
-    ap.add_argument("--country", default=None)
-    ap.add_argument("--currency", default="USD")
+    ap.add_argument("--country", required=True, help="two-letter code of the policyholder's country, e.g. GB")
+    ap.add_argument("--currency", required=True, help="three-letter claim currency, e.g. GBP")
     a = ap.parse_args()
     d = ingest(a.src, a.country, a.currency)
     print(d)

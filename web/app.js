@@ -356,7 +356,7 @@ async function start() {
   video.srcObject = stream; await video.play();
   const settings = stream.getVideoTracks()[0].getSettings();
   const r = await api("/api/sweeps", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ country: $("country").value.trim().toUpperCase(), currency: $("currency").value.trim().toUpperCase(),
+    body: JSON.stringify({ country: $("country").value.trim().toUpperCase() || null, currency: $("currency").value.trim().toUpperCase() || null,
       device: { ...settings, orientation: screen.orientation && screen.orientation.type, ua: navigator.userAgent } }) });
   if (!r.ok) return fail(r.status === 401 ? "Wrong or expired access token. Scan the QR code again." : "Server said " + r.status);
   sweepId = (await r.json()).sweep_id; t0 = performance.now();

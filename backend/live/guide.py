@@ -79,6 +79,7 @@ class Guide:
         self.setup_asks = 0                                # asks in the current step
         self.ar = False                                    # the phone can measure the room (WebXR)
         self.room_area: float | None = None
+        self.locale_known = True                           # False until the user has given country + currency
 
     @property
     def in_setup(self) -> bool:
@@ -103,7 +104,7 @@ class Guide:
         """What to say for the current setup step, if anything. A step asked `setup_asks` times without an answer is
         given up (the sweep matters more than a perfect setup)."""
         c = self.cfg
-        if not self.in_setup:
+        if not self.in_setup or not self.locale_known:     # the agent is still asking for country and currency
             return None
         if self.setup == "start":
             if self._gate(now, "setup:start", 0.0, last_user_speech_t) is None:

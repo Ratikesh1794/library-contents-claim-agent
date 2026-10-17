@@ -27,7 +27,7 @@ SWEEP_ID_RE = re.compile(r"^sw_[A-Za-z0-9_]+$")
 FRAME_NAME_RE = re.compile(r"^f_\d+\.jpg$")
 
 
-def new_sweep(country: str | None, currency: str, root: Path | None = None, **extra) -> Path:
+def new_sweep(country: str | None, currency: str | None, root: Path | None = None, **extra) -> Path:
     sid = time.strftime("sw_%Y%m%d_%H%M%S_") + secrets.token_hex(2)
     sd = Path(root or CFG.sweeps_dir) / sid
     (sd / "frames").mkdir(parents=True)

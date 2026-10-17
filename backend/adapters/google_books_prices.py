@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 
+from backend.config import CFG
 from backend.core.http import get_json
 from backend.ports import Listing
 
@@ -31,7 +32,7 @@ class GoogleBooksPrices:
         return (country or "").upper() or None            # Google Play Books sells per country: the code is the market
 
     def fallback_markets(self) -> list[str]:
-        return ["US"]
+        return list(CFG.price_fallback_markets)
 
     def search(self, query: str, market: str, condition: str, books: bool = True, hint: dict | None = None) -> list[Listing]:
         """Union of three query styles (measured: each finds books the others miss, e.g. "The Power of Now" only with the

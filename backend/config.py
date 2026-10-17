@@ -164,6 +164,9 @@ class Config:
 
     # --- price
     list_T: float = 0.8
+    # No local listing -> look in these markets and convert (labelled converted). A sourcing choice (the largest
+    # English-language book markets), not the user's locale, which always comes from the user.
+    price_fallback_markets: tuple[str, ...] = ("US", "GB")
     appraisal_threshold_usd: float = 100.0  # converted to the sweep currency via FX at runtime
     antiquarian_year: int = 1900
     used_min_listings: int = 3

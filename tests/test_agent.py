@@ -40,7 +40,7 @@ def test_session_config_is_valid_for_the_sdk_and_tuned_for_noise():
     assert a_in["noise_reduction"] == {"type": "far_field"}
     assert a_in["turn_detection"]["type"] == "server_vad" and a_in["turn_detection"]["threshold"] == CFG.vad_threshold
     assert "format" not in a_in and "IN" in c["instructions"] and "INR" in c["instructions"]
-    assert {t["name"] for t in agent.TOOLS} == {"record_user_fact", "mark_region", "finish_sweep"}
+    assert {t["name"] for t in agent.TOOLS} == {"record_user_fact", "mark_region", "set_locale", "finish_sweep"}
     import dataclasses
     off = agent.session_config({}, dataclasses.replace(CFG, noise_reduction="off"))
     assert "noise_reduction" not in off["audio"]["input"]
@@ -175,3 +175,13 @@ def test_spoken_shelf_names_map_to_coach_rows(tmp_path):
     a._run_tool("record_user_fact", '{"target_hint": "second shelf", "fact": "all signed"}')
     a._run_tool("record_user_fact", '{"target_hint": "Dune", "fact": "first edition"}')
     assert s.hooks.skips == [("row2", "skip")] and s.hooks.facts == [("row2", "all signed"), ("Dune", "first edition")]
+
+
+def test_set_locale_records_what_the_user_said_and_rejects_guesses():
+    class H:
+        got = None
+        def on_locale(self, country, currency): H.got = (country, currency)
+    assert agent.execute_tool(H(), "set_locale", {"country": "uk", "currency": "gbp"})["ok"] and H.got == ("GB", "GBP")
+    assert not agent.execute_tool(H(), "set_locale", {"country": "Britain", "currency": "pounds"})["ok"]
+    assert not agent.execute_tool(H(), "set_locale", {"country": "GB"})["ok"]                   # half-filled: ask
+    assert "unknown" in agent.instructions({"country": None, "currency": None})

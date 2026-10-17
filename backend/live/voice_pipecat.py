@@ -74,11 +74,20 @@ def make_tools(hooks) -> list:
         """
         await params.result_callback(execute_tool(hooks, "mark_region", {"region": region, "action": action}))
 
+    async def set_locale(params, country: str, currency: str):
+        """Record the user's country and the claim currency, once the user has said them.
+
+        Args:
+            country: ISO 3166 two-letter country code, e.g. GB.
+            currency: ISO 4217 three-letter currency code, e.g. GBP.
+        """
+        await params.result_callback(execute_tool(hooks, "set_locale", {"country": country, "currency": currency}))
+
     async def finish_sweep(params):
         """Call when the user says they are done walking the room."""
         await params.result_callback(execute_tool(hooks, "finish_sweep", {}))
 
-    return [record_user_fact, mark_region, finish_sweep]
+    return [record_user_fact, mark_region, set_locale, finish_sweep]
 
 
 def _make_bridge(session):

@@ -202,7 +202,7 @@ def test_setup_over_the_websocket_focus_then_room_then_sweep(tmp_path):
     cfg = dataclasses.replace(CFG, sweeps_dir=tmp_path, setup_first_s=0.0, guide_gap_s=0.0)
     app = create_app(TOK, cfg, vision=FakeVision([]), catalogue=FakeCatalogue({}), voice=FakeVoice())
     with TestClient(app) as c:
-        sid = c.post("/api/sweeps", json={}, headers=H).json()["sweep_id"]
+        sid = c.post("/api/sweeps", json={"country": "GB", "currency": "GBP"}, headers=H).json()["sweep_id"]
         s = None
         with c.websocket_connect(f"/ws/live?sweep={sid}&t={TOK}") as ws:
             def until(pred):
@@ -224,3 +224,18 @@ def test_setup_over_the_websocket_focus_then_room_then_sweep(tmp_path):
             said.append(s.inject.get_nowait())
         assert [x.split('"')[1][:20] for x in said] == [
             "First, let's get the", "Sharp, good. Now the", "Room measured: 12 sq"]
+
+
+def test_no_country_or_currency_is_assumed_and_finish_waits_for_them(tmp_path):
+    import json
+    cfg = dataclasses.replace(CFG, sweeps_dir=tmp_path)
+    app = create_app(TOK, cfg, vision=FakeVision([]), catalogue=FakeCatalogue({}), voice=FakeVoice())
+    with TestClient(app) as c:
+        sid = c.post("/api/sweeps", json={"country": None, "currency": ""}, headers=H).json()["sweep_id"]
+        meta = json.loads((tmp_path / sid / "meta.json").read_text())
+        assert meta["country"] is None and meta["currency"] is None
+        c.post(f"/api/sweeps/{sid}/finish", headers=H)
+        s = app.state.sessions[sid]
+        assert not s.finished and "which country" in s.inject.get_nowait()          # asks instead of building
+        s.hooks.on_locale("GB", "GBP")
+        assert json.loads((tmp_path / sid / "meta.json").read_text())["currency"] == "GBP"

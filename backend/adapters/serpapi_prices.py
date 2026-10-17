@@ -32,7 +32,7 @@ def currency_of(text: str, country: str) -> str | None:
     t = text or ""
     cur = next((c for sym, c in sorted(SYMBOL.items(), key=lambda kv: -len(kv[0])) if sym in t), None)
     if cur is None and "$" in t:
-        cur = DOLLAR.get(country.upper(), "USD")
+        cur = DOLLAR.get(country.upper())          # "$" elsewhere: not certain which dollar -> no price
     return cur
 
 
@@ -69,7 +69,7 @@ class SerpApiPrices:
         return (country or "").upper() or None
 
     def fallback_markets(self) -> list[str]:
-        return ["US"]
+        return list(CFG.price_fallback_markets)
 
     def search(self, query: str, market: str, condition: str, books: bool = True) -> list[Listing]:
         key = os.environ.get("SERPAPI_API_KEY")

@@ -23,6 +23,7 @@ import logging
 import re
 
 from backend.config import CFG
+from backend.core import locale
 from backend.prompts import agent as prompts, fill
 
 log = logging.getLogger(__name__)
@@ -38,6 +39,8 @@ TOOLS = [
         target_hint="what it refers to: item id, shelf row, or title words", fact="what the user said"),
     _fn("mark_region", "Skip or include a shelf region on the user's instruction.",
         region="region id, e.g. row2", action="skip or include"),
+    _fn("set_locale", "Record the user's country and the claim currency, once the user has said them.",
+        country="ISO 3166 two-letter country code, e.g. GB", currency="ISO 4217 three-letter currency code, e.g. GBP"),
     _fn("finish_sweep", "Call when the user says they are done walking the room."),
 ]
 
@@ -59,7 +62,8 @@ def normalize_region(text: str) -> str:
 def execute_tool(hooks, name: str, a: dict) -> dict:
     """What every voice tool does to the app (shared by both voice engines). Writes USER FACTS only.
     Half-filled calls (seen with background chatter) are rejected so the model asks instead of guessing."""
-    missing = [k for k in {"record_user_fact": ("fact",), "mark_region": ("region", "action")}.get(name, ())
+    missing = [k for k in {"record_user_fact": ("fact",), "mark_region": ("region", "action"),
+                           "set_locale": ("country", "currency")}.get(name, ())
                if not str(a.get(k) or "").strip()]
     if missing:
         return {"ok": False, "error": f"missing {', '.join(missing)}; ask the user which one they mean"}
@@ -70,6 +74,12 @@ def execute_tool(hooks, name: str, a: dict) -> dict:
         hooks.on_fact(hint, a["fact"], None)
     elif name == "mark_region":
         hooks.on_skip(normalize_region(a["region"]), a["action"].strip().lower())
+    elif name == "set_locale":
+        country, currency = locale.clean(a["country"], a["currency"])
+        if not (country and currency):
+            return {"ok": False, "error": "need a two-letter country code and a three-letter currency code; ask the user again"}
+        hooks.on_locale(country, currency)
+        return {"ok": True, "country": country, "currency": currency}
     elif name == "finish_sweep":
         asyncio.create_task(hooks.on_finish())
     else:

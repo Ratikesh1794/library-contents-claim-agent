@@ -307,3 +307,12 @@ def test_setup_without_ar_and_unanswered_steps_move_on():
     g2.setup_event(0, "hello", ar=False)
     g2.setup_event(1, "focused")
     assert "cannot measure the room" in g2.setup_tick(1)["ask"]
+
+
+def test_setup_waits_until_the_user_has_given_country_and_currency():
+    g = Guide(CFG)
+    g.locale_known = False
+    g.setup_event(0, "hello", ar=False)
+    assert g.setup_tick(30) is None                                       # the agent is asking for the locale
+    g.locale_known = True
+    assert g.setup_tick(40)["key"] == "setup:focus"

@@ -28,7 +28,9 @@ def compare(sd: Path, country: str, currency: str, limit: int = 10, source=None,
     objs = [o for o in store.read(sd, "objects.json", list[Object], default=[]) if o.kind == "book" and o.title][:limit]
     facts = store.read(sd, "user_facts.json", list[UserFact], default=[])
     source, fx = source or deps.price_source(), fx or deps.fx()
-    home_c, home_cur = meta.get("country"), meta.get("currency") or "USD"
+    home_c, home_cur = meta.get("country"), meta.get("currency")
+    if not (home_c and home_cur):
+        raise SystemExit("this sweep has no country/currency yet")
     rows = []
     for o in objs:
         row = {"title": o.title}
@@ -46,7 +48,9 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).parent.parent / ".env")
     sweep, country = Path(sys.argv[1]), sys.argv[2].upper()
-    currency = (sys.argv[3] if len(sys.argv) > 3 else CURRENCY.get(country, "USD")).upper()
+    currency = (sys.argv[3] if len(sys.argv) > 3 else CURRENCY.get(country) or "").upper()
+    if not currency:
+        raise SystemExit(f"no known currency for {country}: pass it, e.g. {sys.argv[0]} {sys.argv[1]} {country} EUR")
     rows = compare(sweep, country, currency)
     fmt = lambda c: f"{c['amount']:>8} {c['currency']}" + (" (converted)" if c["converted"] else "") if c["amount"] is not None else f"{'-':>8} {c['status']}"
     print(f"{'book':<40}{rows[0]['home']['country'] if rows else 'home':>4} {'':>14}  {country:>4}")
