@@ -131,8 +131,8 @@ IDs are referenced by tests and the results sheet.
 | D7 | **Plain Python orchestration**, not an agent framework, for the post-sweep pipeline. | Easier to test, time, and explain. |
 | D8 | **Sweep stored as a directory of JSON + frames.** | Enables re-runs, eval, and traceability with no database. |
 | D9 | **Identify is segment → orient → read → match**, not "send frame to a model". | Rotated spines and flat books need an upright crop; OCR alone does not fix orientation. |
-| D10 | **Capture problems are detected by code; the agent only speaks them.** A Coach module emits `CAPTURE_ISSUE` with a reason code and a suggested ask. | Agent cannot skip or invent a reading. Behaviour is testable. |
-| D11 | **Give-up rule:** max 2 asks per region, then `unidentified` with a reason. | No-guess guarantee; keeps the sweep moving. |
+| D10 | **Capture problems are detected by code; the agent only speaks them.** A Guide module (shelf map + capture signals) decides what to say and when, and hands the agent a ready sentence (`GUIDE`). | Agent cannot skip or invent a reading. Behaviour is testable. |
+| D11 | **Give-up rule:** max 2 asks per book, then one "I will note it and move on" and the book stays `unidentified` with its reason. | No-guess guarantee; keeps the sweep moving. |
 | D12 | **No AR/LiDAR dependency.** Any phone browser camera; marker for scale; reconstruction from RGB. LiDAR/WebXR only as optional upgrade. | Works on cheap phones; laptop webcam is a last resort. |
 | D13 | **Take perception and lookup from open/hosted components; build only glue and honesty rules.** | See section 5.1. |
 | D15 | **Voice over WebRTC, never raw audio over our WebSocket.** The phone always sends a WebRTC offer to our server (`/voice`); the API key stays on the laptop. | Raw audio over our WebSocket bypassed the browser's echo cancellation and noise suppression: the agent heard itself and the room. |
@@ -143,6 +143,7 @@ IDs are referenced by tests and the results sheet.
 | D21 | **Two screens.** The phone shows only what the person sweeping needs (camera, voice, counts); a laptop dashboard shows every record, the live activity and the conversation. Live messages fan out to every connected screen. | A phone is too small to review records while walking a room; the person at the laptop can watch quality and coverage as it happens. The phone's QR code lives on the dashboard, not in the terminal. |
 | D19 | **Analyse only what is new.** A keyframe that mostly shows the last analysed frame copies its results; the live worker always works on the newest frame; the spine-read call also says whether a crop is a book at all. | Cost and latency scale with model calls, not frames; a stale queue made coach tips lag; non-books (perfume boxes) were being counted as books. |
 | D22 | **Count books by position, read each once.** Every frame is registered on a shared map of the shelf; a book that lands on an already-registered spot is the same book (forward, backward, return visits, unreadable titles, identical copies side by side all work). Each book is read once and a non-book is remembered. Items still use frame-to-frame tracking. | Title matching fails when titles are unreadable or repeated; a model remembering recent frames forgets books and double-counts when the user goes back. Position is independent of both. On two blurred real sweeps: 198 -> 15 books (11 identified) and 0 -> 25 (15 identified). |
+| D23 | **Guidance is decided by code and must be answered by the model.** The Guide covers slowing down (the phone says it cannot get sharp frames), holding steady on a named book ("the book on the left"), going back to a book that was passed unread (direction from the shelf map, in what the user sees), progress every 10 books, and "this area looks done, move on or say finish". App messages are sent to the Realtime model as a user message followed by a response request. | In Pipecat's Realtime service a context update is only stored and its messages-append handler is a stub, so every coach message was accepted and silently dropped: the agent greeted and then never guided. Position words and directions come from the map, not from the model. |
 | D14 | **Phone is the capture device; the laptop runs the server.** The phone opens the web app in its browser over HTTPS (tunnel or local HTTPS). Laptop webcam is not the primary camera. | Walking a room needs a handheld rear camera; browsers allow camera/mic only on HTTPS, so access topology is part of the design. |
 
 ### 5.1 Build vs take
@@ -190,7 +191,7 @@ Rule: below the readable-pixel threshold the system does not infer. It marks `un
 │  Voice engine "pipecat":  RNNoise ─► Silero VAD + volume gate ─► OpenAI Realtime (turns decided here)│
 │     (engine "direct": phone ↔ OpenAI Realtime, server attached sideband)                           │
 │  Tools record_user_fact, mark_region, finish_sweep; captions + agent state ─► /ws/live            │
-│  Coach: reason codes -> CAPTURE_ISSUE text for the agent                                           │
+│  Guide: shelf map + capture signals -> GUIDE sentences for the agent                               │
 │  Sweep Store (disk):  sweeps/<id>/ frames/ frames.json sightings/ links.json user_facts.json …     │
 │                                                                                                    │
 │  Live worker: newest frame ─► already seen? carry results over : IDENTIFY                          │
@@ -214,7 +215,7 @@ Rule: below the readable-pixel threshold the system does not infer. It marks `un
 | Live server + voice engine | WebRTC signalling; filter and gate the user's audio (pipecat) or attach sideband (direct); run tools; push captions / agent state / inventory to the UI | Write inventory facts itself; send the API key to the phone |
 | Live voice agent | Converse, coach, ask questions, relay user corrections via tools | State prices, titles, or dimensions as fact |
 | Identify | Per keyframe: segment each book, classify orientation, rotate/upscale crop, read text, catalogue match + score; non-book classification; emit reason code on failure | Guess below threshold |
-| Coach | Per-region state (`ask_count`, `resolved`); turns reason codes into one rate-limited `CAPTURE_ISSUE` message; closes region after 2 asks | Read, name, or judge content |
+| Guide | Per-book state (asked, when, how often) kept on the shelf map; turns capture signals, unreadable books and the map into one rate-limited `GUIDE` sentence; gives up on a book after 2 asks | Read, name, or judge content |
 | Dedupe | Merge sightings of the same object (shelf + position + frame overlap, 3D location when available) | Drop unidentified books |
 | Measure | Marker → cm/px per shelf plane; spine dims; shelf run; room dims and areas | Estimate scale by model "feel" |
 | Price | Query sources, match listing to item, record URL/date/condition, FX with `converted` flag | Output a number without a source |
@@ -249,7 +250,7 @@ Measure and Price run in parallel after Dedupe, since price needs only identity 
 **Live agent tools**
 | Tool | Purpose |
 |---|---|
-| (inbound) `CAPTURE_ISSUE{region, reason, ask}` | Sent by Coach, not called by the agent. Agent speaks the ask in one sentence. |
+| (inbound) `GUIDE{ask}` | Sent by the Guide, not called by the agent. Agent speaks the ask word for word, one sentence. (`CAPTURE_ISSUE` is the older per-region form.) |
 | `record_user_fact(target_hint, fact)` | e.g. "first edition", "print", "signed"; stored with the transcript |
 | `mark_region(region, action)` | skip/include a shelf on user instruction |
 | `finish_sweep()` | user says done; starts finalize |
@@ -316,25 +317,25 @@ Layout rules:
 | Spine hidden / cover or page edge only | Count, record dims, `unidentified` (`stack_hidden`). |
 | Partly occluded | Count only if clearly a separate book; else review queue. |
 
-### 6.8 Coach
+### 6.8 Guide
 
-Reason codes (computed in code):
+Code decides what to say and when; the agent speaks the sentence word for word and has no tool that writes a title, price or measurement.
 
-| Code | Detector | Suggested ask |
+| Topic | Trigger (computed in code) | Says (examples) |
 |---|---|---|
-| `too_far` | Spine text height < ~12 px or tiny box | "Step a bit closer to shelf 2." |
-| `blur` | Laplacian variance below threshold | "Hold steady for a second." |
-| `glare` | Blown-out pixel patch over region | "Tilt the phone or step to the side." |
-| `too_dark` | Low mean brightness | "Can you turn on a light?" |
-| `blocked` | Non-book object overlaps region | "Could you move the lamp, or shift so I can see past it?" |
-| `partial` | Box cut by frame edge | "Pan a bit further right." |
-| `stack_hidden` | Spine not visible | No ask; logged as unidentified. |
+| `slow` | The phone rejected several frames in a row as too blurry and told the server | "Slow down a little. Pause on each shelf for a second." Then, if it continues: "Still too blurry. Stop for a moment and hold the phone still." |
+| `book:*` | A book in view stays unreadable for 2 s. The cause comes from the failed crop (`too_far`, `blur`/`low_confidence`, `glare`, `too_dark`, `blocked`, `partial`); the position from where it sits in the frame | "Hold steady on the book on the left for a second." / "Move a bit closer to the books on the right." / "Tilt the phone a little to cut the glare on the book at the top." / "Pan a little further so the book on the left is fully in view." |
+| `giveup` | A book was asked about twice | "I could not read the book on the left. I will note it and move on." |
+| `back` | An unreadable book left the view 4 s ago or more. The direction is where the shelf map puts it in what the user sees | "I could not read the book you passed on your left. Go back and hold steady on it." (right, higher up, lower down; "two books", "a few books") |
+| `progress` | Every 10 books found | "That is 20 books found so far. Keep going." |
+| `idle` | 15 s with no new book and nothing in view needing attention (a timer, so it also works when the user holds still and no frames arrive) | "That area looks done. Move on to the next shelf, or say finish when you have covered everything." Then, after a minute: "Nothing new for a while. Say finish when you are done." |
 
 Behaviour:
-- Group by shelf region; one message at a time; ≥8 s between messages; wait ~2 s for the next frame to fix it.
-- Max 2 asks per region; then close as `unidentified` (reason kept) and say so once.
+- One message at a time, at least 6 s between any two, a cooldown per topic, silence for 2 s after the user speaks. The same topic again gets firmer wording.
+- Failures the user cannot fix (`author_not_visible`, `no_catalogue_match`, `ambiguous_match`, `stack_hidden`) are never mentioned.
+- Max 2 asks per book, then one "I will note it and move on" and the book is left alone. "Skip this shelf" silences that row of the current view.
+- "Go back" waits while a book in view is about to be asked about; in-view problems come first.
 - Never ask the user to pull out, open, rearrange, or individually photograph books. Moving an obstruction or moving closer is allowed.
-- Agent has no tool that writes a title, price, or measurement.
 
 ### 6.9 Room measurement without AR
 
@@ -389,9 +390,9 @@ Fallbacks, in order: marker-scaled plane fit from single-view homography on floo
 | Live model session drops | Phone re-establishes the WebRTC call; frames already saved so pipeline unaffected |
 | Pipeline exceeds 3 min budget | Stages emit partial results; packet built with what exists; unfinished lines go to review queue |
 | Low-res camera / spine too small | `unidentified` + `too_far`/`blur`; dims kept; honest count in results |
-| Region still failing after 2 asks | Closed as `unidentified`, reason in review queue |
+| Book still unreadable after 2 asks | One "I will note it and move on"; stays `unidentified`, reason in review queue |
 | Spine not facing camera (stacked) | Counted, dims recorded, `stack_hidden`, no ask |
-| Phone upload stalls (weak Wi-Fi / tunnel) | Browser lowers keyframe quality/fps; Coach tells user to slow down; keyframes queue and flush; sweep continues |
+| Phone upload stalls (weak Wi-Fi / tunnel) | Browser lowers keyframe quality/fps; the Guide tells the user to slow down; keyframes queue and flush; sweep continues |
 | Background voices (TV, other people) | Engine `pipecat`: RNNoise + volume gate ignore distant voices (a TV ~20 dB quieter than the user, tested); a loud voice near the phone can still pass: raise `VAD_MIN_VOLUME` or use hold-to-talk |
 | Phone can't reach the laptop for voice (other network) | Voice reconnect attempts fail; capture continues; switch to `VOICE_ENGINE=direct` or add a TURN server |
 | Voice call drops | Browser re-offers (up to 5 times with backoff); the server hangs up the old call and starts the new one; capture continues meanwhile |
@@ -422,6 +423,7 @@ Every number answers "where did this come from?":
 | Background voices trigger the agent | Agent interrupts itself, answers the TV | Laptop-side RNNoise + volume-gated VAD (D18); hold-to-talk fallback |
 | Detector boxes non-books as books | Inflated count | `is_book` check in the read call (D19); local detector gives tight outlines (no invented boxes) |
 | Used-price sources thin in some countries | Many blanks/converted | Accept and label honestly; second country chosen for good coverage |
+| Guidance accepted by the model service but never spoken | The agent greets, then never guides | App messages are sent as a user message plus a response request (D23); verified against the real voice agent, with regression tests |
 | Live agent drifts into stating facts | Fabrication in speech | Prompt + tool-only fact path; voice summary read from the packet |
 | Overfitting to own room | Collapse at review | Test on a second, unseen shelf before submission |
 

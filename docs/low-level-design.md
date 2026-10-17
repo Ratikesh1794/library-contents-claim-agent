@@ -26,7 +26,7 @@ backend/
   stages/            quality.py, catalogue.py, identify.py, track.py, dedupe.py, measure_scale.py,
                      measure_books.py, measure_room.py, price.py, assemble.py, report.py
   live/              app.py (FastAPI, /ws/live, /voice signalling, auth, rate limits), voice_pipecat.py (voice engine
-                     "pipecat"), agent.py (voice engine "direct" + shared tools), coach.py
+                     "pipecat"), agent.py (voice engine "direct" + shared tools), guide.py (what to say, when), coach.py (legacy per-row asks; only `close()` is still used)
   adapters/          openai_vision, open_library, google_books, ebay, frankfurter, null_reconstructor
   templates/         report.html.j2
 web/
@@ -81,7 +81,7 @@ class UserFact(BaseModel):
 | Task | Detail |
 |---|---|
 | Camera | `getUserMedia({video:{facingMode:"environment", width:{ideal:3840}, height:{ideal:2160}, frameRate:{ideal:30,max:30}}})`; the phone picks the closest mode it supports. Actual settings go to the server in `meta.device`. A **Camera** picker (`enumerateDevices`, names after permission) swaps `facingMode` for an exact `deviceId`. The same page runs on the laptop: the dashboard's "Use laptop camera" opens `/?t=` on `localhost` (a secure context, so no tunnel needed) and the user carries the laptop. WebXR room measuring stays phone-only (hidden when unsupported). |
-| Keyframes | **Best of window.** Every 120 ms grab the video frame and score sharpness on a **full-resolution 512 px centre patch** (Laplacian variance); keep the sharpest frame of each ~0.7 s window. Upload it only if it reaches `sharpRel` (0.5) × the 75th percentile of recent samples (and `sharpFloor`) **and** the view changed (`diffFloor`, mean abs diff of a 320 px copy vs the last keyframe). Three rejected windows in a row show "pause on each shelf". Why: real sweeps were mostly motion blur, and a 320 px thumbnail of a 4K frame hides it (a 10 px smear becomes < 1 px), so the old 320 px gate passed nearly everything. Consecutive keyframes must still overlap, because dedupe tracks boxes between them. Cap ~400 per sweep. |
+| Keyframes | **Best of window.** Every 120 ms grab the video frame and score sharpness on a **full-resolution 512 px centre patch** (Laplacian variance); keep the sharpest frame of each ~0.7 s window. Upload it only if it reaches `sharpRel` (0.5) × the 75th percentile of recent samples (and `sharpFloor`) **and** the view changed (`diffFloor`, mean abs diff of a 320 px copy vs the last keyframe). Three rejected windows in a row: the phone sends `{"type":"blurry"}` over its WebSocket and the server decides what to say (§6); offline the phone shows the banner itself. Why: real sweeps were mostly motion blur, and a 320 px thumbnail of a 4K frame hides it (a 10 px smear becomes < 1 px), so the old 320 px gate passed nearly everything. Consecutive keyframes must still overlap, because dedupe tracks boxes between them. Cap ~400 per sweep. |
 | Frame grab | From the live **video** stream: `createImageBitmap(video)`, JPEG-encoded (quality 0.85) in a Web Worker (`OffscreenCanvas.convertToBlob`), long side ≤ 3840 px (the camera's full detail), shrunk until ≤ 2.5 MB. `ImageCapture.takePhoto` is **not** used: on real phones it refocused and fired the shutter every call (~2.6 s per frame, frozen preview). |
 | Quality scores | Quick browser-side scores (Laplacian variance, glare, brightness) only decide what to upload; the server re-scores every crop (section 4). |
 | Voice | WebRTC (section 3.2): mic track on an `RTCPeerConnection`, offer POSTed to `/voice`, agent audio played by an `<audio>` element. The answer's `X-Voice-Engine` header says which engine answered: `pipecat` greets server-side; `direct` needs the greeting triggered over the `oai-events` data channel. Audio contexts are unlocked synchronously inside the Start tap (mobile autoplay rules); a "tap to turn on the voice" fallback appears if the browser still blocks playback. |
@@ -99,10 +99,10 @@ Flow:
 1. `POST /api/sweeps` creates the dir and `meta.json`, and starts a frame worker for the sweep.
 2. `POST /api/sweeps/{id}/frames` saves the keyframe and queues it. The frame worker takes the **newest** queued frame (skipped ones are identified at finish), copies the last analysed frame's results if the view was already seen (`identify.carry_over`, §5.3), otherwise runs `identify_frame` with that frame as the reuse anchor. It then rebuilds the live inventory with the same dedupe as the pipeline and lets the Coach react.
 3. **Voice signalling:** the phone POSTs its SDP offer to `POST /api/sweeps/{id}/voice`. The selected engine (`VOICE_ENGINE`) answers it; the answer carries `X-Voice-Engine`. A new offer (reconnect) hangs up the previous call. The API key never leaves the laptop.
-4. Coach and app-state messages are injected as user messages prefixed `[app-state]`, only when nobody is speaking.
+4. Guide and app-state messages are queued on `session.inject` and delivered as a user message prefixed `[app-state]` **followed by a response request** (`voice_pipecat.say`: a `conversation.item.create` then `response.create`), only when nobody is speaking. Appending to the Pipecat context is NOT enough: the Realtime service only stores a context update and its messages-append handler is a stub, so messages sent that way were accepted and never spoken.
 5. `finish_sweep` (tool or button) → pipeline; then `PACKET_READY` with the templated voice summary; the transcript is saved to `transcript.json`.
 
-`/ws/live` is down-only: `inventory`, `coach`, `status`, `transcript` (role, item id, text, append|set), `agent_state` (listening / hearing / thinking / speaking), `packet_ready`.
+`/ws/live` goes down to the screens, and the phone sends back one capture signal, `{"type":"blurry","n"}` (§6). Down: `inventory`, `coach` (`{type:"coach", kind: GUIDE|CAPTURE_ISSUE|STATUS, key, ask|text}`: the original type is kept in `kind`, because a message spread over `{type:"coach"}` used to overwrite it and no screen showed any tip), `status`, `transcript` (role, item id, text, append|set), `agent_state` (listening / hearing / thinking / speaking), `packet_ready`.
 
 **Engine `pipecat`** (default, `backend/live/voice_pipecat.py`)
 - Transport: Pipecat `SmallWebRTCTransport`; the phone's WebRTC terminates on the laptop (same Wi-Fi; ngrok carries only the page and signalling; `ICE_SERVERS` for STUN/TURN).
@@ -145,7 +145,7 @@ Flow:
 
 ### 3.3 Agent contract
 
-Prompts live in `backend/prompts/` (Python constants): `agent.py: SYSTEM` (rules + `$country`/`$currency`), `coach.py: ASKS` (what to say per capture reason), `vision.py` (vision prompts).
+Prompts live in `backend/prompts/` (Python constants): `agent.py: SYSTEM` (rules + `$country`/`$currency`), `coach.py: ASKS, GUIDE_ASKS, BOOK_ASKS, BACK_ASK, BACK_WHERE, GIVE_UP, PROGRESS, IDLE` (what to say for each kind of guidance), `vision.py` (vision prompts).
 
 Tools (all return small JSON; none write facts about items). Calls with a required argument missing are rejected with an error asking the model to clarify (seen with background chatter).
 
@@ -155,12 +155,12 @@ Tools (all return small JSON; none write facts about items). Calls with a requir
 | `mark_region` | `region`, `action: skip\|include` (both required) | Coach closes the region; a `skip` fact marks its books `unidentified` with reason `user_skipped`. |
 | `finish_sweep` | none | Triggers the pipeline. |
 
-Inbound app-state messages (injected by the server): `CAPTURE_ISSUE{region, reason, ask}`, `STATUS{text}`, `PACKET_READY{summary_facts}`. (`QUESTION` for art "original or print?" is in the contract but nothing emits it yet.)
+Inbound app-state messages (injected by the server): `GUIDE{ask}` (said word for word), `CAPTURE_ISSUE{region, reason, ask}` (older per-region form), `STATUS{text}`, `PACKET_READY{summary_facts}`. (`QUESTION` for art "original or print?" is in the contract but nothing emits it yet.)
 
 System prompt rules (short, testable; full text in `backend/prompts/agent.py`):
 1. You are a capture coach and conversation partner. You never read titles, state prices, or give measurements yourself.
 2. Greet; confirm country and currency; explain the sweep in two sentences.
-3. On `CAPTURE_ISSUE`, say its `ask` in one short sentence. Do not add detail.
+3. On `CAPTURE_ISSUE` or `GUIDE`, say its `ask` word for word in one short sentence. Do not add detail.
 4. On `QUESTION`, ask it verbatim once; on the user's answer call `record_user_fact`.
 5. Never ask the user to pull books out, open them, rearrange shelves, scan barcodes, or photograph items one by one.
 6. If the user corrects or says skip, call the matching tool and acknowledge briefly.
@@ -259,26 +259,29 @@ Input: `frames/*.jpg`, `frames.json`. Output: `sightings.json`.
 
 The spine-read call also returns `is_book`: whether the crop is *mainly* one book spine. Crops that mainly show something else (a perfume box, bottle, DVD…) are dropped, so they are never counted or priced. No extra model call. On a real sweep this rejected a perfume box ("ARABIAN AROMA") whose detector box also clipped a real book, while three real spines passed.
 
-## 6. Coach (`coach.py`)
+## 6. Guide (`backend/live/guide.py`) and the legacy Coach (`coach.py`)
 
-State per region (`shelf_id` from segmenter's row/column grouping or user speech):
+Code decides what to say and when; the agent only speaks the `ask` word for word. `Guide` has no clock of its own (callers pass `now`), so every rule is testable. State lives in `Book.meta` on the shelf map (`reason`, `seen_t`, `pending_since`, `asked`, `asked_t`, `recalled`, `recalled_t`, `skip`, `read`, `not_book`), so it follows a book through merges.
 
-```python
-class Region: id; ask_count=0; last_ask_t=-inf; state: open|resolved|closed; failing_ids: set
-```
+**One gate for everything** (`_gate`): at least `guide_gap_s` (6 s) since anything was last spoken, a per-topic cooldown, and silence for 2 s after the user spoke. Saying a topic again within a window gets the next, firmer wording.
 
-Algorithm (runs on each batch of sightings):
-1. Group failing sightings by region and reason; weight = count of books.
-2. Region `resolved` when ≥ 80% of its previously failing sightings are now identified or have `reason=stack_hidden`.
-3. Choose top region by weight with `reason ∈ askable` (`too_far, blur, glare, too_dark, blocked, partial`).
-4. Rate limit: `now - last_global_ask ≥ 8 s`; wait `settle_s=2` after the first failing frame before asking; skip if the user spoke in the last 2 s.
-5. Emit `CAPTURE_ISSUE{region, reason, ask}`; `ask_count += 1`. Ask text is a template per reason (HLD 6.8) with region name filled from a human label ("shelf 2, top row").
-6. If `ask_count ≥ 2` and still failing → `state=closed`; mark its sightings `unidentified` (keep reason); emit one `STATUS` line "marked unreadable".
-7. `stack_hidden` never asks.
+| Method | Topic (`key`) | Rule |
+|---|---|---|
+| `on_blurry(now)` | `slow` | The phone sent `{"type":"blurry"}` (after `blurNudgeAfter` = 3 rejected sampling windows, at most every 4 s). Cooldown `guide_slow_gap_s` (15 s); 2nd message in 60 s is firmer. Why a phone signal and not "no frames": a user holding steady on an unchanged shelf also sends none. |
+| `on_frame(now, w, h, view, tracker)` | `book:hold` / `closer` / `glare` / `dark` / `blocked` / `partial` | After each frame. `view` = (sighting, book) of the latest frame (`BookTracker.view`). A book is *pending* when it is not identified, its reason is fixable (`HOW` maps blur, low_confidence, too_far, glare, too_dark, blocked, partial; `author_not_visible`, `no_catalogue_match`, `ambiguous_match` are not), not skipped, not a non-book. It must stay pending `guide_settle_s` (2 s). The most common cause among pending books chooses the sentence; `where()` turns their frame positions (3x3 grid) into "the book on the left", "the books at the top", "the book at the top right", "in view". Each book is asked at most `guide_book_asks` (2) times, `guide_book_gap_s` (12 s) apart. |
+| | `giveup` | A pending book already asked twice: one "I could not read ... I will note it and move on", then `skip` is set. |
+| `_come_back` (from `on_frame`) | `back` | Books on the current map that are out of view (`BookTracker.offscreen`, positions from `ShelfMap.locate` = the map point through the inverse of the last frame's homography, in the pixels of what the user sees; x<0 left, x>w right, y<0 higher, y>h lower), unresolved, last seen at least `guide_moved_on_s` (4 s) ago, more than 10% of a frame away. Only the nearest side is mentioned, with the count ("the book", "two books", "a few books"). Max `guide_back_asks` (2) per book, `guide_back_gap_s` (20 s) apart. Waits while a book in view is still in its settling window (`about_to_ask`); in-view problems always come first, but a book in view that was already asked about does not block it (a first version blocked on any unresolved book in view and would never have spoken on a real shelf). Books on another map have no position and are not mentioned. |
+| `on_tick(now, count)` | `progress` | Every `guide_progress_every` (10) books, once per milestone with the real number; at most every `guide_progress_gap_s` (20 s). |
+| | `idle` | `guide_idle_s` (15 s) with no new book, nothing in view needing attention (`busy_t`), and nothing just said (`last_t`); at most every `guide_idle_gap_s` (60 s); the 2nd message in 3 min is the shorter "say finish". Never before the first book. |
+| `skip(tracker, frame_id, region)` | | The agent's `mark_region(rowN, skip)`: books in that row of the current view stop being asked about. |
 
-Coverage ("missed shelf"): maintain a coarse coverage map from segmented shelf rows; when the user has been on a new area ≥ 5 s and some detected shelf row has < `min_frames` sharp sightings, emit `partial`/"missed" for that row.
+**Wiring (`backend/live/app.py`).** `frame_worker` calls `on_frame` after each analysed or carried frame (the old per-row `Coach.update` is no longer called). A `guide_loop` task per session calls `on_tick` every `guide_tick_s` (2 s) while a phone is connected. The WebSocket reader turns `{"type":"blurry"}` from the phone into `on_blurry`. Every message goes through `guide_say`: a `coach` event for the screens (`screen_event`) and `GUIDE ask="..."` on `session.inject` for the agent. Wording lives in `backend/prompts/coach.py`.
 
-Tests: rate limit honoured; same region closed after two asks; resolved region stops asking; no ask for `stack_hidden`.
+**Legacy `Coach`.** The per-region class (asks about "shelf row 2", resolved/closed states) is kept only for `close(region)` on a skip and its own tests. Its asks were weak in practice: only fixable reasons triggered them (rare once capture got sharper), "row 2" is relative to each frame and means nothing to the user, and it only ran when a new frame arrived.
+
+Config: `guide_gap_s=6 guide_slow_gap_s=15 guide_repeat_window_s=60 guide_settle_s=2 guide_book_asks=2 guide_book_gap_s=12 guide_moved_on_s=4 guide_back_asks=2 guide_back_gap_s=20 guide_tick_s=2 guide_progress_every=10 guide_progress_gap_s=20 guide_idle_s=15 guide_idle_gap_s=60`.
+
+Tests: `test_guide.py` (gating, escalation, wording by cause, positions, give-up, skip, direction left/right, not repeated, read-in-the-meantime, unfixable reasons, no starvation by an already-asked book, progress milestones, idle timing and its exceptions); `test_shelf_map.py` (`locate`); `test_live.py` (the phone's blurry signal, an unreadable book, the idle timer without frames); `test_voice_pipecat.py` (`say`: a user message item plus a response request, the fallback, waiting while the agent speaks, surviving a failed delivery). Each guidance type was also checked once against the real voice agent over WebRTC (the agent speaks the exact sentence within about half a second).
 
 ## 7. Dedupe and the shelf map (`dedupe.py`, `shelf_map.py`, `book_tracker.py`, `track.py`)
 
@@ -449,7 +452,10 @@ identify: min_box_px=900 occl_iou=0.3 title_match_T=0.85 author_match_T=0.8 publ
           crop_workers=6 identify_workers=6 reuse_iou=0.5
 novelty:  novelty_skip_coverage=0.85 novelty_max_zoom=1.15 retry_reasons=(blur glare too_dark too_far blocked partial)
 tracking: track_max_side=1024 track_features=2000 track_min_inliers=25 track_span=2 track_iou=0.3 item_contain_weight=0.6
-coach:    asks_per_region=2 ask_gap_s=8 settle_s=2
+map:      map_candidates=4 map_cross=2 map_max_search=300 map_search_budget_s=2 map_same_view=0.85 map_match=0.35 map_absorb=0.3 copy_overlap=0.2
+read:     read_tries=3 reread_gain=1.5
+guide:    guide_gap_s=6 guide_settle_s=2 guide_book_asks=2 guide_book_gap_s=12 guide_moved_on_s=4 guide_back_asks=2 guide_back_gap_s=20
+          guide_slow_gap_s=15 guide_progress_every=10 guide_idle_s=15 guide_idle_gap_s=60 guide_tick_s=2   (legacy coach: asks_per_region=2 ask_gap_s=8 settle_s=2)
 price:    list_T=0.8 appraisal_threshold_usd=100 (converted via FX at runtime) antiquarian_year=1900 condition_assumed="good"
 serving:  keyframe_max_bytes=3_000_000 public_origin=<set by run.sh>
 limits:   rate_frames=5/1s rate_voice=6/60s rate_finish=3/60s rate_new_sweep=10/60s
@@ -496,17 +502,20 @@ Changes from the original design, and why:
 | Prompts | Inline in code | `backend/prompts/` constants | One place to edit what models are told |
 | Per-frame cost | Detect every keyframe | Carry over already-seen views; newest frame first; not-a-book check in the read call | Fewer model calls, live panel stays current, fewer false books |
 | Models | Unspecified | Mini models by default | Cost |
+| Live guidance | Coach: per-row asks from failure reason codes | Guide: slow down (phone signal), hold steady on a named book, go back to a passed book (direction from the shelf map), progress, area done; delivered as a user message plus a response request | The coach's messages were never spoken (Pipecat stores a context update silently) nor shown (event type overwritten); its "row 2" asks meant nothing to the user |
 
 Built and covered by tests: quality gating, identify (segment/orient/read/match, parallel reads, read-once reuse), catalogue matching, tracking + dedupe, carry-over of already-seen views, not-a-book check, strict identity, Coach, marker scale, book dimensions, room math (synthetic points), pricing (FX, appraisal rules), assemble/validation, self-contained report, pipeline, eval, ingest, API auth and rate limits, both voice engines. Both voice engines verified end to end with a scripted WebRTC client against real OpenAI (quiet room and background-TV scenarios).
 
 Not built yet:
 - Room reconstruction and **markerless** scale: `NullReconstructor` only, so room fields stay blank and go to review. Research favoured fusing several scale sources (metric-depth model such as MapAnything, phone motion sensors, scene priors) and measuring the error on real rooms; not started.
 - Room fallbacks (floor-marker homography, user-stated height); marker-plane rectification and per-shelf scale.
-- Coach "missed shelf" coverage map; `QUESTION` messages (art "original or print?"); linking spoken references ("the book on the left") to an object.
+- A coverage map for "you missed a shelf" (the Guide only goes back to books it saw but could not read, and says when an area looks done); `QUESTION` messages (art "original or print?"); linking spoken references ("the book on the left") to an object.
 - A second price source (eBay serves both new and used; without eBay keys every price is blank); item dimensions (text hint only).
 
 Known issues:
 - Non-books: the read-time `is_book` check rejects them (verified on a small real sample); the detector still draws loose boxes that can mix an object and a book.
 - Background voices: fixed for distant sources by the Pipecat engine's volume gate (verified with a scripted WebRTC client: TV ~20 dB below the user ignored); a loud TV near the phone can still pass, and soft first words can be clipped. Not true voice isolation (Krisp VIVA / ai-coustics are commercial options in Pipecat).
 - Item counts after tracking are unverified on a sweep captured with the new camera path.
+- The Guide's directions need the frame to be on the shelf map; frames that line up with nothing start a separate map and books there have no position (the agent stays quiet rather than guess).
+- Guidance has been checked against the real voice agent with scripted phones and synthetic shelves, not yet with a person walking a real room.
 
