@@ -252,6 +252,22 @@ function showDone(m) {
 }
 
 // ---------------------------------------------------------------- start / finish
+// Camera choice: default = rear camera on a phone (the only camera on most laptops); or a specific device, e.g. a
+// laptop's built-in or external webcam. Device names only show once camera permission has been granted.
+function videoConstraints() {
+  const id = $("camera").value;
+  return { ...(id ? { deviceId: { exact: id } } : { facingMode: "environment" }),
+           width: { ideal: CONFIG.video.width }, height: { ideal: CONFIG.video.height }, frameRate: { ideal: 30, max: 30 } };
+}
+async function listCameras() {
+  const pick = $("camera"), keep = pick.value;
+  const cams = (await navigator.mediaDevices?.enumerateDevices().catch(() => []) || []).filter((d) => d.kind === "videoinput" && d.deviceId);
+  pick.replaceChildren(new Option("Default (back camera on a phone)", ""), ...cams.map((d, i) => new Option(d.label || `Camera ${i + 1}`, d.deviceId)));
+  pick.value = cams.some((d) => d.deviceId === keep) ? keep : "";
+}
+listCameras();
+navigator.mediaDevices?.addEventListener?.("devicechange", listCameras);
+
 function fail(msg) { $("err").textContent = msg; $("start").disabled = false; setPill("Not started", "bad"); }
 
 async function start() {
@@ -261,8 +277,9 @@ async function start() {
   if (!navigator.mediaDevices?.getUserMedia) return fail("Camera needs a secure (https) link. Use the https address the server printed.");
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment", width: { ideal: CONFIG.video.width }, height: { ideal: CONFIG.video.height }, frameRate: { ideal: 30, max: 30 } }, audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      video: videoConstraints(), audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
   } catch (e) { return fail(e.name === "NotAllowedError" ? "Camera or microphone permission was denied. Allow both in your browser settings, then try again." : "Could not open camera/mic: " + e.name); }
+  listCameras();                                   // names are visible now that permission is granted
   video.srcObject = stream; await video.play();
   const settings = stream.getVideoTracks()[0].getSettings();
   const r = await api("/api/sweeps", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -373,8 +390,7 @@ async function onXrEnd() {
   xr = null; $("xrOverlay").hidden = true;
   if (finished) return;
   try {                                                       // give the camera back to the sweep
-    const v = await navigator.mediaDevices.getUserMedia({ video: {
-      facingMode: "environment", width: { ideal: CONFIG.video.width }, height: { ideal: CONFIG.video.height }, frameRate: { ideal: 30, max: 30 } } });
+    const v = await navigator.mediaDevices.getUserMedia({ video: videoConstraints() });
     stream.addTrack(v.getVideoTracks()[0]); video.srcObject = stream; await video.play();
   } catch (e) { addSystemLine("The camera could not restart after measuring: " + e.name); }
 }

@@ -82,14 +82,14 @@ function handle(m) {
   switch (m.type) {
     case "hello":
       currency = m.meta?.currency || "USD"; hero();
-      pill("pillPhone", m.phone ? "Phone connected" : "Phone offline", m.phone ? "ok" : "off");
+      pill("pillPhone", m.phone ? "Camera connected" : "Camera offline", m.phone ? "ok" : "off");
       phoneOnline = m.phone; showConnect();
       if (m.finished) loadPacket();
       break;
     case "phone":
-      pill("pillPhone", m.connected ? "Phone connected" : "Phone offline", m.connected ? "ok" : "off");
+      pill("pillPhone", m.connected ? "Camera connected" : "Camera offline", m.connected ? "ok" : "off");
       phoneOnline = m.connected; showConnect();
-      feed("phone", m.connected ? "<b>Phone connected</b>" : "Phone disconnected"); break;
+      feed("phone", m.connected ? "<b>Camera connected</b>" : "Camera disconnected"); break;
     case "agent_state": { const [t, s] = VOICE[m.state] || ["Voice " + m.state, "warn"]; pill("pillVoice", t, s); break; }
     case "inventory": inv = m; render(); break;
     case "frame": frameEvent(m); break;
@@ -311,7 +311,9 @@ async function loadConnect() {
   $("copyUrl").onclick = () => navigator.clipboard?.writeText(c.phone_url).then(() => ($("copyUrl").textContent = "Copied"));
 }
 function showConnect(force) { $("connect").hidden = !(force || (!phoneOnline && !qrDismissed)); }
-$("showQr").onclick = () => { qrDismissed = false; showConnect(true); };
+// The sweep page runs on the laptop too: http://localhost counts as secure, so the browser allows the camera.
+$("useLaptop").href = `/?${q({})}`;
+$("showQr").onclick =() => { qrDismissed = false; showConnect(true); };
 $("hideQr").onclick = () => { qrDismissed = true; showConnect(); };
 
 emptyStates();

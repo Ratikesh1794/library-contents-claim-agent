@@ -466,6 +466,14 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
                 s.phones -= 1
                 await s.down.put({"type": "phone", "connected": s.phones > 0})
 
+    @app.middleware("http")
+    async def revalidate_static(request: Request, call_next):
+        """Browsers otherwise reuse an old app.js/css after an update; no-cache still uses the ETag (304s)."""
+        resp = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
     app.mount("/static", StaticFiles(directory=WEB), name="static")
     return app
 

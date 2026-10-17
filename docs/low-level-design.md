@@ -80,7 +80,7 @@ class UserFact(BaseModel):
 
 | Task | Detail |
 |---|---|
-| Camera | `getUserMedia({video:{facingMode:"environment", width:{ideal:3840}, height:{ideal:2160}, frameRate:{ideal:30,max:30}}})`; the phone picks the closest mode it supports. Actual settings go to the server in `meta.device`. |
+| Camera | `getUserMedia({video:{facingMode:"environment", width:{ideal:3840}, height:{ideal:2160}, frameRate:{ideal:30,max:30}}})`; the phone picks the closest mode it supports. Actual settings go to the server in `meta.device`. A **Camera** picker (`enumerateDevices`, names after permission) swaps `facingMode` for an exact `deviceId`. The same page runs on the laptop: the dashboard's "Use laptop camera" opens `/?t=` on `localhost` (a secure context, so no tunnel needed) and the user carries the laptop. WebXR room measuring stays phone-only (hidden when unsupported). |
 | Keyframes | Every ~0.7 s, score a 320 px grayscale copy; upload only if sharp enough (`sharpFloor`) **and** the view changed (`diffFloor`, mean abs diff vs the last keyframe). Consecutive keyframes must still overlap, because dedupe tracks boxes between them. Cap ~400 per sweep. |
 | Frame grab | From the live **video** stream: `createImageBitmap(video)`, JPEG-encoded in a Web Worker (`OffscreenCanvas.convertToBlob`), long side ≤ 2560 px, shrunk until ≤ 2.5 MB. `ImageCapture.takePhoto` is **not** used: on real phones it refocused and fired the shutter every call (~2.6 s per frame, frozen preview). |
 | Quality scores | Quick browser-side scores (Laplacian variance, glare, brightness) only decide what to upload; the server re-scores every crop (section 4). |

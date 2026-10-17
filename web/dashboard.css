@@ -204,3 +204,5 @@ td.thumb img{width:56px;height:56px;object-fit:cover;border-radius:8px;border:1p
 @media (max-width:1280px){.kpis{grid-template-columns:repeat(3,1fr)} .totals{grid-template-columns:repeat(3,1fr)}}
 @media (max-width:1080px){.layout{grid-template-columns:1fr}.side{position:static}.picker select{min-width:200px}.tagline{display:none}}
 @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+.btn,.chip,.switch,.product{white-space:nowrap}
+@media (max-width:1560px){.topbar{gap:12px;padding:10px 20px}.tagline{display:none}select{min-width:230px}.switch{font-size:12px}}

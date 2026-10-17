@@ -17,13 +17,16 @@
   </div>
   <div class="spacer"></div>
   <div class="status" aria-label="Connection status">
-    <span id="pillPhone" class="chip" data-s="off"><i></i><span>Phone offline</span></span>
+    <span id="pillPhone" class="chip" data-s="off"><i></i><span>Camera offline</span></span>
     <span id="pillVoice" class="chip" data-s="off"><i></i><span>Voice idle</span></span>
     <span id="pillConn" class="chip" data-s="warn"><i></i><span>Connecting…</span></span>
   </div>
   <button id="showQr" class="btn ghost" title="Show the phone's QR code">
     <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>Connect phone
   </button>
+  <a id="useLaptop" class="btn primary" target="_blank" rel="noopener" title="Run the sweep with this laptop's camera, in a new tab">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M2 20h20"/></svg>Use laptop camera
+  </a>
 </header>
 
 <main>
@@ -42,13 +45,14 @@
   <section id="connect" class="card connect" hidden>
     <div id="qr" class="qr" aria-label="QR code for the phone"></div>
     <div class="connect-body">
-      <h2>Connect your phone</h2>
+      <h2>Start a sweep: phone or laptop camera</h2>
       <ol class="steps">
         <li>Scan the code with the phone's camera and open the link.</li>
         <li>Allow camera and microphone, then tap <b>Start sweep</b>.</li>
         <li>Pan the shelves slowly. Records appear here as they're found.</li>
       </ol>
       <div class="linkrow"><code id="phoneUrl"></code><button id="copyUrl" class="btn small">Copy link</button></div>
+      <p class="note">No phone? Use <b>Use laptop camera</b> (top right): it opens the same sweep page here, then carry the laptop around the room. Records still appear on this tab.</p>
       <p id="httpsWarn" class="note warn" hidden>This link isn't HTTPS, so phones won't allow the camera. Start the server with <code>scripts/run.sh</code> (it opens a secure tunnel).</p>
     </div>
     <button id="hideQr" class="iconbtn" aria-label="Hide">×</button>
