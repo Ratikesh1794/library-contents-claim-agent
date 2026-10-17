@@ -8,3 +8,9 @@ ASKS = {
     "blocked": "Could you move the object in front, or shift so I can see past it?",
     "partial": "Pan a bit further so $region is fully in view.",
 }
+
+# Proactive guidance (backend/live/guide.py). A list is escalating wording: the 2nd message in a row is firmer.
+GUIDE_ASKS = {
+    "slow": ["Slow down a little. Pause on each shelf for a second.",
+             "Still too blurry. Stop for a moment and hold the phone still."],
+}

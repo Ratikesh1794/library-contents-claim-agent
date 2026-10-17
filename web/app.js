@@ -138,7 +138,7 @@ async function grabJpeg(bmp, q) {               // takes ownership of bmp (close
 // Best-of-window: every sampleEveryMs grab the current video frame and keep it only if it is the sharpest so far in
 // this window; when the window closes, send that one frame if it is sharp enough. Panning blurs most frames, but the
 // short pauses between movements give sharp ones, and this catches them.
-let best = null, windowStart = 0, sharpHist = [], blurRun = 0, lastNudge = 0;
+let best = null, windowStart = 0, sharpHist = [], blurRun = 0, lastNudge = 0, lastSignal = 0;
 
 async function sampleTick() {
   if (!sweepId || finished || xr || seq >= CONFIG.maxKeyframes || video.readyState < 2) { best?.bmp.close(); best = null; return; }
@@ -156,8 +156,12 @@ async function commitKeyframe(b) {
   const p75 = [...sharpHist].sort((x, y) => x - y)[Math.floor(sharpHist.length * 0.75)] || 0;
   if (b.sharp < Math.max(CONFIG.sharpFloor, CONFIG.sharpRel * p75)) {
     b.bmp.close();
-    if (++blurRun >= CONFIG.blurNudgeAfter && performance.now() - lastNudge > 10000) {
-      lastNudge = performance.now(); showCoach("Too fast for sharp photos: pause on each shelf for a second.");
+    if (++blurRun >= CONFIG.blurNudgeAfter) {
+      if (ws && ws.readyState === 1) {                             // the server decides whether and how to say it (voice + banner)
+        if (performance.now() - lastSignal > 4000) { lastSignal = performance.now(); ws.send(JSON.stringify({ type: "blurry", n: blurRun })); }
+      } else if (performance.now() - lastNudge > 10000) {          // offline: at least show it
+        lastNudge = performance.now(); showCoach("Too fast for sharp photos: pause on each shelf for a second.");
+      }
     }
     return;
   }

@@ -163,3 +163,17 @@ def test_the_same_view_sent_again_and_again_stays_one_book_in_the_inventory(clie
                 inventory = m
                 break
     assert inventory["counts"]["books"] == 1 and inventory["counts"]["analysed"] >= 1
+
+
+def test_the_phone_saying_it_is_too_blurry_gets_a_spoken_and_shown_slow_down(client):
+    sid = client.post("/api/sweeps", json={}, headers=H).json()["sweep_id"]
+    with client.websocket_connect(f"/ws/live?sweep={sid}&t={TOK}") as phone:
+        phone.receive_json(); phone.receive_json()                  # phone presence + first inventory
+        phone.send_text('{"type": "blurry", "n": 3}')
+        m = phone.receive_json()
+        assert m["type"] == "coach" and m["key"] == "slow" and "Slow down" in m["ask"]
+        phone.send_text('{"type": "blurry", "n": 4}')               # again straight away: held back
+        phone.send_text("not json")                                 # garbage never breaks the connection
+        sess = client.app.state.sessions[sid]
+        said = sess.inject.get_nowait()
+        assert said.startswith('GUIDE ask="Slow down') and sess.inject.empty()

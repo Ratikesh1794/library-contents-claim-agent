@@ -116,6 +116,10 @@ class Config:
     ask_gap_s: float = 8.0
     settle_s: float = 2.0
     resolve_ratio: float = 0.8
+    # --- guide (backend/live/guide.py): proactive spoken guidance
+    guide_gap_s: float = 6.0             # minimum time between any two spoken guidance messages
+    guide_slow_gap_s: float = 15.0       # "slow down" at most this often
+    guide_repeat_window_s: float = 60.0  # the same topic again within this window gets firmer wording
 
     # --- tracking / dedupe (backend/stages/track.py)
     track_max_side: int = 1024   # frames are downscaled to this for feature matching

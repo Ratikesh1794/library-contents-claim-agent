@@ -39,6 +39,7 @@ from backend.live import agent, voice_pipecat
 from backend.stages import dedupe, identify, track
 from backend.stages.room_corners import room_from_corners
 from backend.live.coach import Coach
+from backend.live.guide import Guide, screen_event
 from backend.config import CFG, ROOT, Config
 from backend.schemas import Frame, Sighting, UserFact
 
@@ -73,6 +74,7 @@ class SweepSession:
     call_id: str | None = None                                      # current OpenAI WebRTC call
     voice_task: asyncio.Task | None = None                          # sideband controller for that call
     tracker: BookTracker | None = None                              # shelf map: each book counted and read once
+    guide: Guide | None = None                                      # proactive spoken guidance
 
     def now(self) -> float:
         return time.time() - self.t0
@@ -158,6 +160,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
         s = app.state.sessions.get(sweep_id)
         if s is None:
             s = SweepSession(sweep_id, get_dir(sweep_id), cfg, Coach(cfg))
+            s.guide = Guide(cfg)
             s.hooks = Hooks(s, finish)
             s.tasks.append(asyncio.create_task(frame_worker(s)))
             s.tasks.append(asyncio.create_task(fanout(s)))
@@ -175,6 +178,11 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
                     q.put_nowait(m)
                 except asyncio.QueueFull:
                     log.warning("a screen is not keeping up; dropped a %s message", m.get("type"))
+
+    async def guide_say(s: SweepSession, m: dict) -> None:
+        """Show a guide message on the screens and have the agent say it."""
+        await s.down.put(screen_event(m))
+        await s.inject.put(f'GUIDE ask="{m["ask"]}"')
 
     async def frame_worker(s: SweepSession):
         """Identify keyframes as they arrive; update the panel and let the Coach react."""
@@ -211,8 +219,9 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
                               "titles": [x.accepted.title for x in books if x.accepted][:6]})
             await push_inventory(s)
             for m in s.coach.update(sightings, s.now(), s.last_user_speech_t):
-                await s.down.put({"type": "coach", **m})
+                await s.down.put(screen_event(m))
                 if m["type"] == "CAPTURE_ISSUE":
+                    s.guide.note_spoken(s.now())
                     await s.inject.put(f"CAPTURE_ISSUE region={m['region']} reason={m['reason']} ask=\"{m['ask']}\"")
                 else:
                     await s.inject.put(f"STATUS {m['text']}")
@@ -446,9 +455,19 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
         role = "dashboard" if ws.query_params.get("role") == "dashboard" else "phone"
         q: asyncio.Queue = asyncio.Queue(maxsize=5000)
 
-        async def reader():                               # nothing to read (voice is WebRTC); detects disconnects
+        async def reader():                               # voice is WebRTC; the phone only sends capture signals here
             while True:
-                await ws.receive_text()
+                raw = await ws.receive_text()
+                if role != "phone" or s.finished:
+                    continue
+                try:
+                    msg = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(msg, dict) and msg.get("type") == "blurry":     # it rejected several frames in a row
+                    m = s.guide.on_blurry(s.now(), s.last_user_speech_t)
+                    if m:
+                        await guide_say(s, m)
 
         async def writer():
             while True:
