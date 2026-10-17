@@ -65,10 +65,16 @@ class Config:
     models_dir: Path = Path(os.environ.get("MODELS_DIR") or ROOT / "models")
     book_model: str = "yolo11m-seg.pt"      # COCO; only class 73 "book" is used
     item_model: str = "yoloe-11l-seg.pt"    # open vocabulary: finds whatever item_vocab names
-    item_vocab: tuple[str, ...] = (
-        "chair", "sofa", "table", "desk", "bed", "lamp", "television", "computer monitor", "laptop", "picture frame",
-        "rug", "potted plant", "vase", "clock", "speaker", "cabinet", "bookshelf", "printer", "laundry basket", "bag",
+    item_vocab: tuple[str, ...] = (          # what the brief asks for: shelving, furniture, appliances, lamps, art, rugs, electronics, decor
+        "chair", "sofa", "table", "desk", "bed", "bookshelf", "cabinet", "lamp", "television", "computer monitor", "laptop",
+        "speaker", "printer", "picture frame", "painting", "rug", "vase", "potted plant", "clock", "microwave",
+        "coffee machine", "refrigerator",
     )
+    item_keep: tuple[str, ...] = ("furniture", "shelving", "lamp", "appliance", "art", "rug", "electronics", "decor")
+    item_min_sightings: int = 2        # an item seen in only one frame is almost always a blurred fragment, not an object
+    item_min_frac: float = 0.005       # ...and one smaller than this share of the frame is not worth describing
+    person_conf: float = 0.35          # a person this sure is masked out: nothing mostly inside one is detected (no people)
+    person_overlap: float = 0.5        # share of a detection's box covered by a person's outline that removes it
     detect_conf: float = 0.15
     detect_imgsz: int = 1280                # model input size (long side)
     detect_dup_iou: float = 0.5             # same-kind boxes overlapping this much are one object
@@ -165,10 +171,12 @@ class Config:
     listing_blocklist: tuple[str, ...] = (
         "lot of", "set of", "bundle", "collection", "box set", "ebook", "kindle",
         "audiobook", "dvd", "poster", "summary of", "study guide", "pdf",
+        "and other", "other works", "workbook", "companion", "in 30 minutes", "journal", "notebook",
     )
     listing_noise: tuple[str, ...] = (   # words in listing titles that are not part of the book's title
         "paperback", "hardcover", "hardback", "edition", "book", "books", "novel", "new", "used", "by", "mass",
         "market", "trade", "pb", "hc", "first", "printing", "good", "very", "like", "fine", "vintage", "the", "a",
+        "anniversary", "revised", "updated", "expanded", "illustrated", "international", "classic", "deluxe", "special",
     )
     item_categories: tuple[str, ...] = (
         "furniture", "shelving", "lamp", "appliance", "art", "rug", "electronics", "decor", "other",

@@ -31,3 +31,15 @@ def test_quad_layout_and_straight_crop():
     assert abs(_thickness(Detection((0, 0, 1, 1), "book", quad=quad)) - 60) <= 1
     _, flat = quad_of(cv2.boxPoints(((300, 300), (400, 60), 5)))
     assert flat == "flat"
+
+
+def test_people_are_masked_by_their_outline_not_their_box():
+    from backend.adapters.local_detect import drop_people
+    # a person standing in front of a shelf: an L-shaped outline whose BOUNDING BOX would cover the book on the right
+    person = Detection((0, 0, 400, 400), "book", label="person", poly=np.array([[0, 0], [150, 0], [150, 400], [0, 400]], float))
+    on_person = Detection((20, 100, 120, 380), "item")               # the person's torso: removed
+    beside = Detection((250, 100, 350, 380), "book")                 # inside the person's bounding box but not on them: kept
+    half = Detection((120, 100, 220, 380), "item")                   # 30% covered (under the 0.5 overlap): kept
+    kept = drop_people([on_person, beside, half], [person], (400, 400, 3), 0.5)
+    assert kept == [beside, half]
+    assert drop_people([on_person], [], (400, 400, 3), 0.5) == [on_person]                # nobody there: nothing removed

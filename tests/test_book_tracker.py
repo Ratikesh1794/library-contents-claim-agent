@@ -6,7 +6,7 @@ import numpy as np
 from backend.config import CFG
 from backend.core import store
 from backend.ports import Detection, SpineRead
-from backend.schemas import Object, Sighting
+from backend.schemas import ItemGuess, Object, Sighting
 from backend.stages import dedupe, identify
 from backend.stages.book_tracker import BookTracker
 from backend.stages.shelf_map import Book
@@ -75,7 +75,8 @@ def test_retry_rules():
 def test_dedupe_counts_a_never_read_book_once_and_an_item_once(tmp_path):
     sd, frames = same_view(tmp_path, 3)
     book = lambda i: Sighting(id=f"s_{i}_b", frame_id=f"f_{i:04d}", kind="book", bbox=(100, 50, 160, 450), reason="blur")
-    item = lambda i: Sighting(id=f"s_{i}_i", frame_id=f"f_{i:04d}", kind="item", bbox=(300, 300, 500, 500))
+    item = lambda i: Sighting(id=f"s_{i}_i", frame_id=f"f_{i:04d}", kind="item", bbox=(300, 300, 500, 500),
+                              item=ItemGuess(category="lamp"))
     store.write(sd, "sightings.json", [x(i) for i in range(3) for x in (book, item)])
     dedupe.run(sd)
     objs = store.read(sd, "objects.json", list[Object])
@@ -186,3 +187,20 @@ def test_the_item_registry_matches_by_iou_and_stays_apart_from_books():
     c = m.place_items([(600, 300, 800, 500)])[0]                                 # another object
     inside = m.place_items([(320, 320, 400, 400)])[0]                            # small box inside the first: NOT the same item
     assert a is b and a is not c and inside is not a and len(m.items) == 3 and m.count == 1
+
+
+def test_items_outside_the_claim_or_too_small_are_never_recorded(tmp_path):
+    from backend.schemas import ItemGuess
+    sd, frames = same_view(tmp_path, 1)                                  # a 600 x 700 frame: 0.5% = 2100 px
+    tiny = Detection((10, 10, 50, 50), "item")                           # 1600 px: a fragment, never even described
+    other = Detection((300, 300, 500, 500), "item")
+    lamp = Detection((100, 400, 300, 600), "item")
+
+    class V(CountingVision):
+        def describe_item(self, crop):
+            self.describe_calls += 1
+            return ItemGuess(category="other") if self.describe_calls == 1 else ItemGuess(category="lamp")
+    v = V([tiny, other, lamp])
+    out = identify.identify_frame(sd, frames[0], v, FakeCatalogue({}), CFG, tracker=BookTracker())
+    assert v.describe_calls == 2                                         # the tiny one was not described
+    assert [s.item.category for s in out] == ["lamp"]                    # "other" dropped, the lamp kept

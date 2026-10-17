@@ -27,8 +27,11 @@ def catalogue() -> Catalogue:
 
 
 def price_source() -> PriceSource:
+    """eBay (new + used + items) when its keys are set, then Google Books ebook prices (new only, books only)."""
     from backend.adapters.ebay import Ebay
-    return Ebay()
+    from backend.adapters.google_books_prices import GoogleBooksPrices
+    from backend.adapters.price_chain import ChainPriceSource
+    return ChainPriceSource(([Ebay()] if Ebay.configured() else []) + [GoogleBooksPrices()])
 
 
 def fx() -> FX:

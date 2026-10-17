@@ -156,6 +156,12 @@ def _signature(crop: np.ndarray) -> tuple[float, float, float] | None:
     return tuple(float(v) for v in cv2.cvtColor(mid, cv2.COLOR_BGR2LAB).reshape(-1, 3).mean(0))
 
 
+def _drop_tiny_items(dets: list[Detection], shape, cfg: Config) -> list[Detection]:
+    """An item smaller than `item_min_frac` of the frame is a fragment (a bulb, a bit of floor): not described, not recorded."""
+    frame = shape[0] * shape[1]
+    return [d for d in dets if d.kind != "item" or (d.bbox[2] - d.bbox[0]) * (d.bbox[3] - d.bbox[1]) >= cfg.item_min_frac * frame]
+
+
 def _drop_group_boxes(dets: list[Detection], cfg: Config) -> list[Detection]:
     """One box around several books is not a book: its text is whatever title the reader sees first. Dropped when it is
     far larger than the typical book in the frame and squarish (a single spine is long and thin); needs a few other
@@ -180,7 +186,7 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
     Without one, `prev` (previous frame, its sightings) gives the older "reuse from the last frame" shortcut."""
     img = store.load_image(sd, frame.path)
     H, W = img.shape[:2]
-    dets = _drop_group_boxes([d for d in vision.detect(img) if _valid(d, cfg)], cfg)
+    dets = _drop_tiny_items(_drop_group_boxes([d for d in vision.detect(img) if _valid(d, cfg)], cfg), img.shape, cfg)
     books = [d for d in dets if d.kind == "book"]
     rows = assign_rows([d.bbox for d in books])
     row_of = {id(d): r for d, r in zip(books, rows)}
@@ -221,7 +227,7 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
             what, known = tracker.plan_item(tb, sig)
             if what == "copy":
                 s.item = known.model_copy()
-                return fin(s)
+                return fin(s) if s.item.category in cfg.item_keep else None
         if d.kind == "book" and reuse:                       # older shortcut (no tracker): same book in the previous frame
             hit = max(((track.iou(box, d.bbox), ps) for box, ps in reuse), default=(0, None), key=lambda t: t[0])
             if hit[0] >= cfg.reuse_iou:
@@ -252,6 +258,8 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
                     s.item = vision.describe_item(crop)
                     if tracker is not None:
                         tracker.note_item(tb, s.item, sig)
+                    if s.item is None or s.item.category not in cfg.item_keep:
+                        return None                  # "other" or unclear: not something the claim asks for
                 elif d.layout == "cover_only":
                     s.reason = "stack_hidden"
                 else:

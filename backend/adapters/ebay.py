@@ -30,6 +30,10 @@ class Ebay:
     def __init__(self):
         self._token: tuple[str, float] | None = None
 
+    @staticmethod
+    def configured() -> bool:
+        return bool(os.environ.get("EBAY_CLIENT_ID") and os.environ.get("EBAY_CLIENT_SECRET"))
+
     def local_market(self, country: str | None) -> str | None:
         return MARKETPLACES.get((country or "").upper())
 

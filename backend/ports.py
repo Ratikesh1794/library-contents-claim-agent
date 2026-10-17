@@ -22,6 +22,7 @@ class Detection:
     quad: list[tuple[float, float]] | None = None   # rotated rectangle around the object's outline (4 corners, px)
     label: str | None = None       # detector's class name, e.g. "chair" (a hint; the item category comes from describe)
     conf: float = 1.0
+    poly: object | None = None     # outline polygon (N x 2 array), used to mask people out; not stored anywhere
 
 
 @dataclass

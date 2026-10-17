@@ -1,5 +1,8 @@
+import dataclasses
+
 import numpy as np
 
+from backend.config import CFG
 from backend.stages.dedupe import build_objects
 from backend.schemas import Frame, ItemGuess, Sighting
 from tests.fakes import cand
@@ -75,7 +78,8 @@ def test_loosely_boxed_item_still_tracks_but_different_categories_do_not():
     other = Sighting(id="c", frame_id="f_0001", kind="item", bbox=(150, 400, 700, 900), item=ItemGuess(category="rug"))
     L = {("f_0000", "f_0001"): shift(0)}
     assert len(build_objects([tight, loose], [fr(0), fr(1)], L)) == 1          # lamp boxed tight, then with its table
-    assert len(build_objects([tight, other], [fr(0), fr(1)], L)) == 2          # a rug is not the lamp
+    one = dataclasses.replace(CFG, item_min_sightings=1)
+    assert len(build_objects([tight, other], [fr(0), fr(1)], L, one)) == 2     # a rug is not the lamp
 
 
 def test_evidence_prefers_a_detected_box_over_a_carried_copy():
@@ -98,9 +102,21 @@ def test_the_same_pair_apart_in_two_frames_is_two_copies():
 
 
 def test_items_of_different_categories_are_never_merged_even_if_the_map_put_them_together():
-    ss = [item(0, 100, "lamp"), item(1, 100, "table")]
-    objs = build_objects(ss, [fr(0), fr(1)], None, book_groups=[[ss[0].id, ss[1].id]])
+    one = dataclasses.replace(CFG, item_min_sightings=1)
+    ss = [item(0, 100, "lamp"), item(1, 100, "rug")]
+    objs = build_objects(ss, [fr(0), fr(1)], None, one, book_groups=[[ss[0].id, ss[1].id]])
     assert len(objs) == 2
     same = build_objects([item(0, 100, "lamp"), item(1, 100, "lamp")], [fr(0), fr(1)], None,
                          book_groups=[["i_0_100", "i_1_100"]])
     assert len(same) == 1
+
+
+def test_items_must_be_a_category_the_claim_asks_for_and_seen_in_two_frames():
+    ok = [item(0, 100, "lamp"), item(1, 100, "lamp")]                                   # a lamp seen twice: kept
+    once = [item(0, 600, "furniture")]                                                  # seen once: a fragment
+    other = [item(0, 700, "other"), item(1, 700, "other")]                              # "other": not asked for
+    undescribed = [Sighting(id="u0", frame_id="f_0000", kind="item", bbox=(10, 10, 60, 60)),
+                   Sighting(id="u1", frame_id="f_0001", kind="item", bbox=(10, 10, 60, 60))]
+    links = {("f_0000", "f_0001"): shift(0)}
+    objs = [o for o in build_objects(ok + once + other + undescribed, [fr(0), fr(1)], links) if o.kind == "item"]
+    assert [(o.id, o.category) for o in objs] == [("i_001", "lamp")]                    # and the id is renumbered, no gaps

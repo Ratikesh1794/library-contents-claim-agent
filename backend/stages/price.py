@@ -17,6 +17,7 @@ TO UPGRADE: change sources in deps.price_source(); add an LLM yes/no listing jud
 from __future__ import annotations
 
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
@@ -48,7 +49,7 @@ def _accept_book(o: Object, l: Listing, cfg: Config) -> bool:
     if o.isbn and o.isbn.replace("-", "") in l.title.replace("-", ""):
         return True
     drop = set(norm(o.author).split()) | set(cfg.listing_noise) - set(norm(o.title).split())
-    rest = " ".join(w for w in norm(l.title).split() if w not in drop)
+    rest = " ".join(w for w in norm(l.title).split() if w not in drop and not re.fullmatch(r"\d+(st|nd|rd|th)", w))
     return SequenceMatcher(None, norm(o.title), rest).ratio() >= cfg.list_T
 
 
@@ -59,11 +60,14 @@ def _convert(l: Listing, currency: str, fx: FX) -> tuple[float, bool, float | No
     return round(l.price * rate, 2), True, rate, date
 
 
-def _gather(query: str, cond: str, local: str | None, src: PriceSource, accept, currency: str, fx: FX):
-    """-> list of (listing, converted_amount, converted, rate, date) from the first market that has accepted ones."""
+def _gather(query: str, cond: str, local: str | None, src: PriceSource, accept, currency: str, fx: FX, hint: dict | None = None):
+    """-> list of (listing, converted_amount, converted, rate, date) from the first market that has accepted ones.
+    `hint` ({title, author}) is passed only to sources that ask for it (`wants_hints`): a structured search is far more
+    exact than free text, which returns summaries, translations and other books by the same author."""
+    kw = {"hint": hint} if hint and getattr(src, "wants_hints", False) else {}
     for market in ([local] if local else []) + src.fallback_markets():
         try:
-            ls = [l for l in src.search(query, market, cond) if accept(l)]
+            ls = [l for l in src.search(query, market, cond, **kw) if accept(l)]
         except Exception as e:                  # NFR-E5
             log.warning("price source failed (%s): %s", market, e)
             continue
@@ -90,12 +94,16 @@ def price_book(o: Object, user_facts: list[UserFact], currency: str, country: st
     query = o.isbn or f"{o.title} {o.author or ''}".strip()
     local = src.local_market(country)
     acc = lambda l: _accept_book(o, l, cfg)
-    new = _gather(query, "new", local, src, acc, currency, fx)
-    used = _gather(query, "used", local, src, acc, currency, fx)
+    hint = {"title": o.title, "author": o.author}
+    new = _gather(query, "new", local, src, acc, currency, fx, hint)
+    used = _gather(query, "used", local, src, acc, currency, fx, hint)
 
     repl = None
     if new:
-        rep = min(new, key=lambda r: r[1])
+        pool = sorted(new, key=lambda r: r[1])
+        # Lowest accepted NEW listing, except for ebook prices: an ebook store lists cheap knock-off editions next to the
+        # real one ($0.49 for a "$12" book), so the middle of the accepted ones is the honest figure there.
+        rep = pool[len(pool) // 2] if pool[0][0].source.startswith("google_books_ebook") else pool[0]
         repl = _mk("replacement", new, currency, "new", amount=rep[1], rep=rep)
     usd = None
     if used:

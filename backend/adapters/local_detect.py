@@ -22,7 +22,7 @@ from backend.ports import Detection, SpineRead, Vision
 from backend.schemas import ItemGuess
 
 log = logging.getLogger(__name__)
-COCO_BOOK = 73
+COCO_BOOK, COCO_PERSON = 73, 0
 
 
 def _area(b) -> float:
@@ -53,6 +53,23 @@ def dedupe(dets: list[Detection], iou_t: float, ioa_t: float) -> list[Detection]
             kept.remove(inside[0])
         kept.append(d)
     return kept
+
+
+def drop_people(dets: list[Detection], persons: list[Detection], shape, overlap: float) -> list[Detection]:
+    """Remove every detection mostly covered by a person's OUTLINE (not their bounding box: a person standing in front of
+    a shelf must not hide the books beside them). The brief: do not capture people."""
+    polys = [p.poly for p in persons if p.poly is not None and len(p.poly) >= 3]
+    if not polys:
+        return dets
+    mask = np.zeros(shape[:2], np.uint8)
+    cv2.fillPoly(mask, [np.asarray(q, np.int32) for q in polys], 1)
+    keep = []
+    for d in dets:
+        x0, y0, x1, y1 = (max(0, v) for v in d.bbox)
+        area = max(1, (x1 - x0) * (y1 - y0))
+        if float(mask[y0:y1, x0:x1].sum()) / area < overlap:
+            keep.append(d)
+    return keep
 
 
 def quad_of(poly: np.ndarray) -> tuple[list[tuple[float, float]], str]:
@@ -100,7 +117,7 @@ class LocalDetector:
         for box, cls, conf, poly in zip(r.boxes.xyxy.tolist(), r.boxes.cls.tolist(), r.boxes.conf.tolist(), polys):
             quad, layout = quad_of(poly) if poly is not None and len(poly) >= 3 else (None, None)
             out.append(Detection(tuple(int(round(v)) for v in box), kind, layout if kind == "book" else None,
-                                 quad, r.names[int(cls)], float(conf)))
+                                 quad, r.names[int(cls)], float(conf), poly))
         return out
 
     def detect(self, img: np.ndarray) -> list[Detection]:
@@ -108,7 +125,10 @@ class LocalDetector:
             if self._models is None:
                 self._load()
             books, items, _ = self._models
-            dets = self._run(books, img, "book", classes=[COCO_BOOK]) + self._run(items, img, "item")
+            first = self._run(books, img, "book", classes=[COCO_BOOK, COCO_PERSON])     # one pass finds books and people
+            dets = [d for d in first if d.label != "person"] + self._run(items, img, "item")
+            persons = [d for d in first if d.label == "person" and d.conf >= self.cfg.person_conf]
+        dets = drop_people(dets, persons, img.shape, self.cfg.person_overlap)
         return dedupe(dets, self.cfg.detect_dup_iou, self.cfg.detect_dup_ioa)
 
 

@@ -226,8 +226,14 @@ def build_objects(sightings: list[Sighting], frames: list[Frame],
     first = lambda grp: min((fr[s.frame_id].t, s.bbox[0]) for s in grp)
     books = sorted((x for x in out_groups if x[0].kind == "book"), key=first)
     items = sorted((x for x in out_groups if x[0].kind == "item"), key=first)
-    return ([_make(f"b_{n:03d}", "book", grp, fr, row_pos) for n, grp in enumerate(books, 1)] +
-            [_make(f"i_{n:03d}", "item", grp, fr, row_pos) for n, grp in enumerate(items, 1)])
+    objs = [_make(f"b_{n:03d}", "book", grp, fr, row_pos) for n, grp in enumerate(books, 1)]
+    # Items: only what the claim asks for (a category from the brief's list, never "other" or undescribed fragments) and
+    # only if seen in at least `item_min_sightings` frames (a single sighting is almost always a blurred fragment).
+    real = [o for o in (_make("i_000", "item", grp, fr, row_pos) for grp in items)
+            if o.category in cfg.item_keep and len(o.sighting_ids) >= cfg.item_min_sightings]
+    for n, o in enumerate(real, 1):
+        o.id = f"i_{n:03d}"
+    return objs + real
 
 
 def run(sd: Path, cfg: Config = CFG) -> None:

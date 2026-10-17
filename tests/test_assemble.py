@@ -19,7 +19,7 @@ def full_run(tmp_path):
     v = FakeVision(dets, reads=[SpineRead("Dune", "Frank Herbert", None, True), SpineRead(None, None, None, False)])
     cat = FakeCatalogue({"dune": [cand("Dune", "Frank Herbert", isbn="123")]})
     src = FakeSource(new={"EBAY_US": [listing("Dune Frank Herbert", 12.5)]}, used={"EBAY_US": [listing("Dune Frank Herbert", p, "used") for p in (4, 5, 6)]})
-    one_at_a_time = dataclasses.replace(CFG, crop_workers=1)      # the fake reader hands out reads in order
+    one_at_a_time = dataclasses.replace(CFG, crop_workers=1, item_min_sightings=1)   # reads in order; one frame only
     pk = pipeline.run(sd, cfg=one_at_a_time, deps_={"vision": v, "catalogue": cat, "source": src, "fx": FakeFX(), "reconstructor": None})
     return sd, pk
 
