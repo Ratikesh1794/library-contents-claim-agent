@@ -192,9 +192,9 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
         """Progress and "this area looks done": checked on a timer, because a user who holds still sends no frames."""
         while not s.finished:
             await asyncio.sleep(cfg.guide_tick_s)
-            if s.phones <= 0 or s.tracker is None or s.finished:
+            if s.phones <= 0 or s.finished:
                 continue
-            m = s.guide.on_tick(s.now(), s.tracker.count, s.last_user_speech_t)
+            m = s.guide.on_tick(s.now(), s.tracker.count if s.tracker else 0, s.last_user_speech_t)
             if m:
                 await guide_say(s, m)
 
@@ -396,7 +396,14 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
                (f", height {room.height_m} m" if room.height_m else "")
         await s.down.put({"type": "status", "text": text})
         await s.down.put({"type": "room", **room.model_dump()})
-        await s.inject.put(f"STATUS {text}")
+        s.guide.setup_event(s.now(), "room", area=room.floor_area_m2)
+        if s.guide.in_setup:                                  # the "now walk the room" line says the area itself
+            m = s.guide.setup_tick(s.now(), s.last_user_speech_t)
+            if m:
+                await guide_say(s, m)
+            await s.down.put({"type": "setup", "step": s.guide.setup})
+        else:
+            await s.inject.put(f"STATUS {text}")
         return room.model_dump()
 
     @app.post("/api/sweeps/{sweep_id}/voice", dependencies=[Depends(require_token)])
@@ -476,6 +483,12 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
                     msg = json.loads(raw)
                 except ValueError:
                     continue
+                if isinstance(msg, dict) and msg.get("type") == "setup":      # hello {ar} / focused (camera steady and sharp)
+                    s.guide.setup_event(s.now(), str(msg.get("step")), ar=bool(msg.get("ar")))
+                    m = s.guide.setup_tick(s.now(), s.last_user_speech_t)
+                    if m:
+                        await guide_say(s, m)
+                    await s.down.put({"type": "setup", "step": s.guide.setup})
                 if isinstance(msg, dict) and msg.get("type") == "blurry":     # it rejected several frames in a row
                     m = s.guide.on_blurry(s.now(), s.last_user_speech_t)
                     if m:

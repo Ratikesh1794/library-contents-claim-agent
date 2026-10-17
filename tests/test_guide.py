@@ -282,3 +282,28 @@ def test_the_second_done_message_is_shorter_and_says_how_to_finish_and_they_are_
     assert g.on_tick(t + 5, 4) is None
     second = g.on_tick(t + CFG.guide_idle_gap_s + 1, 4)["ask"]
     assert first != second and second.startswith("Nothing new for a while")
+
+
+def test_setup_focus_then_room_then_the_sweep():
+    g = Guide(CFG)
+    assert g.on_tick(10, 0) is None and not g.in_setup                    # no hello (older phone): no setup at all
+    g.setup_event(0, "hello", ar=True)
+    assert g.setup_tick(1) is None                                        # let the greeting finish first
+    assert g.setup_tick(4)["key"] == "setup:focus"
+    assert g.on_blurry(12) is None and g.on_frame(12, 100, 100, []) is None   # book guidance waits for setup
+    g.setup_event(13, "focused")
+    assert g.setup_tick(17)["key"] == "setup:room"
+    g.setup_event(30, "room", area=12.5)
+    m = g.setup_tick(30)
+    assert m["key"] == "setup:start" and "12.5 square metres" in m["ask"] and not g.in_setup
+
+
+def test_setup_without_ar_and_unanswered_steps_move_on():
+    g = Guide(CFG)
+    g.setup_event(0, "hello", ar=False)
+    asks = [m["key"] for t in range(0, 200, 2) if (m := g.on_tick(t, 0))]
+    assert asks[:3] == ["setup:focus", "setup:focus", "setup:start"] and not g.in_setup
+    g2 = Guide(CFG)
+    g2.setup_event(0, "hello", ar=False)
+    g2.setup_event(1, "focused")
+    assert "cannot measure the room" in g2.setup_tick(1)["ask"]

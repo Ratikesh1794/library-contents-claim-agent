@@ -144,6 +144,9 @@ class Config:
     guide_progress_gap_s: float = 20.0   # ...and not more often than this
     guide_idle_s: float = 15.0           # no new book and nothing needing attention for this long = "area looks done"
     guide_idle_gap_s: float = 60.0       # ...said at most this often
+    setup_first_s: float = 3.0           # setup: first ask this long after the phone connects (queued behind the greeting)
+    setup_repeat_s: float = 25.0         # ...asked again after this long without an answer
+    setup_asks: int = 2                  # ...and given up after this many asks (focus -> room -> start the sweep)
 
     # --- tracking / dedupe (backend/stages/track.py)
     track_max_side: int = 1024   # frames are downscaled to this for feature matching

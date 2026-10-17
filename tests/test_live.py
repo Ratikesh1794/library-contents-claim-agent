@@ -196,3 +196,31 @@ def test_the_area_done_message_is_sent_on_a_timer_even_when_no_frames_arrive(tmp
                     break
                 time.sleep(0.1)
     assert any(x.startswith('GUIDE ask="That area looks done') for x in said)
+
+
+def test_setup_over_the_websocket_focus_then_room_then_sweep(tmp_path):
+    cfg = dataclasses.replace(CFG, sweeps_dir=tmp_path, setup_first_s=0.0, guide_gap_s=0.0)
+    app = create_app(TOK, cfg, vision=FakeVision([]), catalogue=FakeCatalogue({}), voice=FakeVoice())
+    with TestClient(app) as c:
+        sid = c.post("/api/sweeps", json={}, headers=H).json()["sweep_id"]
+        s = None
+        with c.websocket_connect(f"/ws/live?sweep={sid}&t={TOK}") as ws:
+            def until(pred):
+                while not pred(m := ws.receive_json()):
+                    pass
+                return m
+            ws.send_json({"type": "setup", "step": "hello", "ar": True})
+            assert until(lambda m: m["type"] == "coach")["key"] == "setup:focus"
+            ws.send_json({"type": "setup", "step": "focused"})
+            assert until(lambda m: m["type"] == "coach")["key"] == "setup:room"
+            r = c.post(f"/api/sweeps/{sid}/room/corners", headers=H,
+                       json={"corners": [[0, 0, 0], [4, 0, 0], [4, 0, 3], [0, 0, 3]], "ceiling_y": 2.5})
+            assert r.status_code == 200
+            m = until(lambda m: m["type"] == "coach")
+            assert m["key"] == "setup:start" and "12 square metres" in m["ask"]
+            s = app.state.sessions[sid]
+        said = []
+        while not s.inject.empty():
+            said.append(s.inject.get_nowait())
+        assert [x.split('"')[1][:20] for x in said] == [
+            "First, let's get the", "Sharp, good. Now the", "Room measured: 12 sq"]

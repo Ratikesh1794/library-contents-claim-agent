@@ -34,3 +34,14 @@ BACK_WHERE = {"left": "on your left", "right": "on your right", "above": "higher
 PROGRESS = "That is $n books found so far. Keep going."
 IDLE = ["That area looks done. Move on to the next shelf, or say finish when you have covered everything.",
         "Nothing new for a while. Say finish when you are done."]
+
+# Before the sweep (backend/live/guide.py, setup): camera focus first, then the room size, then the sweep.
+SETUP = {
+    "focus": ["First, let's get the camera sharp. Point it at the nearest shelf and hold still for two seconds.",
+              "Hold the phone still on one shelf until the picture is sharp."],
+    "room": ["Sharp, good. Now the room size: tap Measure the room, aim the circle at each floor corner in turn, and tap Add point.",
+             "Tap Measure the room on the screen and mark the floor corners."],
+    "start_measured": "Room measured: $area square metres. Now walk the room once, slowly, shelf by shelf.",
+    "start_skipped": "We will leave the room size blank. Now walk the room once, slowly, shelf by shelf.",
+    "start_no_ar": "Sharp, good. This phone cannot measure the room, so the room size stays blank. Now walk the room once, slowly, shelf by shelf.",
+}

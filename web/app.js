@@ -16,6 +16,9 @@ const CONFIG = {
   maxBytes: 2_500_000,       // stay under the server's keyframe_max_bytes (3 MB, backend/config.py)
   queueMax: 20, queueSlow: 10, maxKeyframes: 400,
   coachBannerMs: 8000,
+  // Setup "camera focused": the centre patch stays this sharp for this many samples in a row (~1 s at sampleEveryMs).
+  // Calibration knob: Laplacian variance depends on the scene; a held-still shelf on a phone scores well above this.
+  focusMin: 25, focusSteady: 8,
 };
 const $ = (id) => document.getElementById(id);
 const TOKEN = new URLSearchParams(location.search).get("t") || "";
@@ -139,10 +142,20 @@ async function grabJpeg(bmp, q) {               // takes ownership of bmp (close
 // this window; when the window closes, send that one frame if it is sharp enough. Panning blurs most frames, but the
 // short pauses between movements give sharp ones, and this catches them.
 let best = null, windowStart = 0, sharpHist = [], blurRun = 0, lastNudge = 0, lastSignal = 0;
+let setupStep = null, steady = 0, arOK = false;      // setup (server-driven): focus -> room -> start -> done
+
+function checkFocus(sharp) {                        // tell the server once the picture is steady and sharp
+  if (setupStep !== "focus") return;
+  steady = sharp >= CONFIG.focusMin ? steady + 1 : 0;
+  if (steady >= CONFIG.focusSteady && ws && ws.readyState === 1) {
+    setupStep = "sent"; ws.send(JSON.stringify({ type: "setup", step: "focused" }));
+  }
+}
 
 async function sampleTick() {
   if (!sweepId || finished || xr || seq >= CONFIG.maxKeyframes || video.readyState < 2) { best?.bmp.close(); best = null; return; }
   const bmp = await createImageBitmap(video), sharp = patchSharpness(bmp);
+  checkFocus(sharp);
   sharpHist.push(sharp); if (sharpHist.length > CONFIG.sharpHistory) sharpHist.shift();
   if (!best || sharp > best.sharp) { best?.bmp.close(); best = { bmp, sharp, t: (performance.now() - t0) / 1000 }; }
   else bmp.close();
@@ -281,7 +294,11 @@ $("talkMode").onclick = () => { talkMode = talkMode === "open" ? "ptt" : "open";
 function connectWs() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws/live?sweep=${sweepId}&t=${encodeURIComponent(TOKEN)}`);
-  ws.onopen = () => { if (!pc || pc.connectionState !== "connected") setPill("Connected", "ok"); pump(); };
+  ws.onopen = () => {
+    if (!pc || pc.connectionState !== "connected") setPill("Connected", "ok");
+    ws.send(JSON.stringify({ type: "setup", step: "hello", ar: arOK }));   // the server ignores it after the first
+    pump();
+  };
   ws.onclose = () => { if (finished && !sweepId) return; setPill("Reconnecting…", "warn"); setTimeout(connectWs, 1500); };
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
@@ -292,6 +309,11 @@ function connectWs() {
       case "coach": showCoach(m.ask || m.text); addSystemLine("Tip: " + (m.ask || m.text)); break;
       case "status": addSystemLine(m.text); if (/disabled|reconnect|fail/i.test(m.text)) setPill(m.text.slice(0, 40), "warn"); break;
       case "packet_ready": showDone(m); break;
+      case "setup":
+        if (m.step !== "focus" || setupStep !== "sent") setupStep = m.step;
+        $("measureRoom").classList.toggle("primary", m.step === "room");
+        if (m.step === "room") $("measureRoom").scrollIntoView({ behavior: "smooth", block: "center" });
+        break;
     }
   };
 }
@@ -345,6 +367,8 @@ async function start() {
     wakeLock = await navigator.wakeLock.request("screen");
     document.addEventListener("visibilitychange", async () => { if (document.visibilityState === "visible" && sweepId && !finished) wakeLock = await navigator.wakeLock.request("screen").catch(() => null); });
   } catch (e) { showCoach("Please keep the screen on during the sweep."); }
+  try { await stream.getVideoTracks()[0].applyConstraints({ advanced: [{ focusMode: "continuous" }] }); } catch (e) {}
+  await arReady;                                   // hello must say whether this phone can measure the room
   connectWs(); micLevelMeter(); applyMic(); scheduleKeyframes();
   startVoice().catch(voiceFailed);
 }
@@ -374,7 +398,7 @@ let xr = null;          // { session, refSpace, hitSource, gl, corners: [[x,y,z]
 async function xrSupported() {
   try { return !!(navigator.xr && await navigator.xr.isSessionSupported("immersive-ar")); } catch (e) { return false; }
 }
-xrSupported().then((ok) => { $("measureRoom").hidden = !ok; });
+const arReady = xrSupported().then((ok) => { arOK = ok; $("measureRoom").hidden = !ok; });
 
 function xrText() {
   const n = xr.corners.length;

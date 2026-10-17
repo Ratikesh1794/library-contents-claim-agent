@@ -11,13 +11,15 @@ Topics so far:
   giveup after `guide_book_asks` asks about a book: say we move on, then leave it alone    on_frame()
   back   unreadable books that left the view: go back to them (which way, from the shelf map)   on_frame(tracker=...)
   progress / idle   how many books so far; "this area looks done, move on or say finish"        on_tick()
+  setup  before the sweep: camera focus, then the room size (AR, where the phone has it), then "walk the room"
+         setup_event() / setup_tick(). Book guidance stays quiet until setup is done.
 """
 from __future__ import annotations
 
 from string import Template
 
 from backend.config import CFG, Config
-from backend.prompts.coach import BACK_ASK, BACK_WHERE, BOOK_ASKS, GIVE_UP, GUIDE_ASKS, IDLE, PROGRESS
+from backend.prompts.coach import BACK_ASK, BACK_WHERE, BOOK_ASKS, GIVE_UP, GUIDE_ASKS, IDLE, PROGRESS, SETUP
 
 NEVER = float("-inf")
 
@@ -71,6 +73,58 @@ class Guide:
         self.milestone = 0                                 # progress already announced up to this many multiples
         self.progress_t = NEVER                            # when the book count last grew
         self.busy_t = NEVER                                # when a book in view last needed attention
+        # setup: None until the phone says hello (older phones / tests skip it), then focus -> room -> start -> done
+        self.setup: str | None = None
+        self.setup_t = NEVER                               # when the current setup step began
+        self.setup_asks = 0                                # asks in the current step
+        self.ar = False                                    # the phone can measure the room (WebXR)
+        self.room_area: float | None = None
+
+    @property
+    def in_setup(self) -> bool:
+        return self.setup not in (None, "done")
+
+    # ---------------------------------------------------------------- setup: focus, room size, then the sweep
+    def _step(self, step: str, now: float) -> None:
+        self.setup, self.setup_t, self.setup_asks = step, now, 0
+
+    def setup_event(self, now: float, event: str, ar: bool = False, area: float | None = None) -> None:
+        """hello (phone connected; `ar` = it can measure the room), focused (a steady sharp picture), room (measured)."""
+        if event == "hello" and self.setup is None:
+            self.ar = ar
+            self._step("focus", now)
+        elif event == "focused" and self.setup == "focus":
+            self._step("room" if self.ar else "start", now)
+        elif event == "room" and self.in_setup:
+            self.room_area = area
+            self._step("start", now)
+
+    def setup_tick(self, now: float, last_user_speech_t: float = NEVER) -> dict | None:
+        """What to say for the current setup step, if anything. A step asked `setup_asks` times without an answer is
+        given up (the sweep matters more than a perfect setup)."""
+        c = self.cfg
+        if not self.in_setup:
+            return None
+        if self.setup == "start":
+            if self._gate(now, "setup:start", 0.0, last_user_speech_t) is None:
+                return None
+            if self.room_area is not None:
+                ask = Template(SETUP["start_measured"]).substitute(area=f"{self.room_area:g}")
+            else:
+                ask = SETUP["start_skipped"] if self.ar else SETUP["start_no_ar"]
+            self._step("done", now)
+            self.progress_t = now                          # the sweep starts now: "area looks done" counts from here
+            return {"type": "GUIDE", "key": "setup:start", "ask": ask}
+        if self.setup_asks >= c.setup_asks and now - self.setup_t >= c.setup_repeat_s:     # no answer: move on
+            self._step("room" if self.setup == "focus" and self.ar else "start", now)
+            return self.setup_tick(now, last_user_speech_t)
+        wait = c.setup_first_s if self.setup_asks == 0 else c.setup_repeat_s
+        if now - self.setup_t < wait or self._gate(now, f"setup:{self.setup}", 0.0, last_user_speech_t) is None:
+            return None
+        texts = SETUP[self.setup]
+        self.setup_asks += 1
+        self.setup_t = now
+        return {"type": "GUIDE", "key": f"setup:{self.setup}", "ask": texts[min(self.setup_asks - 1, len(texts) - 1)]}
 
     def note_spoken(self, now: float) -> None:
         """Something else just spoke: keep the next guide message from landing on top of it."""
@@ -90,7 +144,7 @@ class Guide:
 
     # ---------------------------------------------------------------- the phone cannot get sharp frames
     def on_blurry(self, now: float, last_user_speech_t: float = NEVER) -> dict | None:
-        n = self._gate(now, "slow", self.cfg.guide_slow_gap_s, last_user_speech_t)
+        n = None if self.in_setup else self._gate(now, "slow", self.cfg.guide_slow_gap_s, last_user_speech_t)
         if n is None:
             return None
         texts = GUIDE_ASKS["slow"]
@@ -102,6 +156,8 @@ class Guide:
         """`view` = [(sighting, book)] for the latest frame. Speak about the books that stay unreadable while they are
         in view; after `guide_book_asks` asks about a book, say once that we move on and stop asking about it. With a
         `tracker`, books passed unread (now out of view) are asked about last, when nothing in view needs attention."""
+        if self.in_setup:
+            return None
         msg, about_to_ask = self._in_view(now, w, h, view, last_user_speech_t)
         if msg is None and not about_to_ask and tracker is not None:
             msg = self._come_back(now, tracker, view, last_user_speech_t)
@@ -186,6 +242,8 @@ class Guide:
         `count` = distinct books found so far. Says how many were found every `guide_progress_every` books; after
         `guide_idle_s` with no new book and nothing needing attention, says the area looks done."""
         c = self.cfg
+        if self.in_setup:
+            return self.setup_tick(now, last_user_speech_t)
         if count > self.best_count:
             self.best_count, self.progress_t = count, now
             if count // c.guide_progress_every > self.milestone:
