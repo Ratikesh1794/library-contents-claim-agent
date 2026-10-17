@@ -10,3 +10,4 @@ python-dotenv
 pytest
 qrcode
 pipecat-ai[openai,webrtc,silero,rnnoise]
+ultralytics        # local detection (backend/adapters/local_detect.py); weights download to models/

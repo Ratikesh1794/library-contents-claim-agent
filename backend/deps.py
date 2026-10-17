@@ -5,9 +5,18 @@ from __future__ import annotations
 from backend.ports import FX, Catalogue, PriceSource, Reconstructor, Vision
 
 
+_local_detector = None      # models load once per process
+
+
 def vision() -> Vision:
+    global _local_detector
     from backend.adapters.openai_vision import OpenAIVision
-    return OpenAIVision()
+    from backend.config import CFG
+    if CFG.detector != "local":
+        return OpenAIVision()                     # detection by the DETECT prompt
+    from backend.adapters.local_detect import LocalDetector, LocalDetectVision
+    _local_detector = _local_detector or LocalDetector()
+    return LocalDetectVision(_local_detector, OpenAIVision())
 
 
 def catalogue() -> Catalogue:

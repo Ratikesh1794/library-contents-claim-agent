@@ -57,6 +57,23 @@ class Config:
     dark_min: float = 60.0       # 99th-percentile brightness; below this even the lettering is too dark
     min_text_px: int = 12      # text height proxy = 0.6 * spine thickness in px
 
+    # --- detect (backend/adapters/local_detect.py). "local" = open-source models on this laptop, no prompt, no cost;
+    # "openai" = the DETECT prompt. Weights live in models/ (downloaded on first use, not in git).
+    # Compared on real sweep frames: COCO YOLO11 splits stacked/packed books best (e.g. 25 vs 16 books on one shelf);
+    # open-vocabulary YOLOE finds room items COCO doesn't know (cabinet, rug, picture frame) or mislabels (cat, suitcase).
+    detector: str = os.environ.get("DETECTOR", "local")                    # local | openai
+    models_dir: Path = Path(os.environ.get("MODELS_DIR") or ROOT / "models")
+    book_model: str = "yolo11m-seg.pt"      # COCO; only class 73 "book" is used
+    item_model: str = "yoloe-11l-seg.pt"    # open vocabulary: finds whatever item_vocab names
+    item_vocab: tuple[str, ...] = (
+        "chair", "sofa", "table", "desk", "bed", "lamp", "television", "computer monitor", "laptop", "picture frame",
+        "rug", "potted plant", "vase", "clock", "speaker", "cabinet", "bookshelf", "printer", "laundry basket", "bag",
+    )
+    detect_conf: float = 0.15
+    detect_imgsz: int = 1280                # model input size (long side)
+    detect_dup_iou: float = 0.5             # same-kind boxes overlapping this much are one object
+    detect_dup_ioa: float = 0.8             # ...or a box this much inside a larger one (fragments of one book/chair)
+
     # --- identify
     min_box_px: int = 900
     max_spine_aspect: float = 40.0

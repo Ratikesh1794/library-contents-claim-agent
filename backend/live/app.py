@@ -241,7 +241,8 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
         s.finished = True
         await s.down.put({"type": "status", "text": "Building your claim packet…"})
         try:
-            packet = await asyncio.to_thread(pipeline.run, s.sd, None, None, cfg, pipeline_deps or {})
+            injected = {k: v for k, v in app.state.deps.items() if k in ("vision", "catalogue") and v is not None}
+            packet = await asyncio.to_thread(pipeline.run, s.sd, None, None, cfg, {**injected, **(pipeline_deps or {})})
         except Exception as e:
             log.exception("pipeline failed")
             s.finished = False

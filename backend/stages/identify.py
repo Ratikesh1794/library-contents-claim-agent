@@ -64,6 +64,31 @@ def _crop(img: np.ndarray, bbox, margin: float) -> np.ndarray:
     return img[max(0, y0 - my):min(H, y1 + my), max(0, x0 - mx):min(W, x1 + mx)]
 
 
+def _crop_quad(img: np.ndarray, quad, margin: float) -> np.ndarray:
+    """Straightened crop of a rotated rectangle (a tilted spine comes out upright, without its neighbours' edges).
+    Corners are ordered by position, so the crop keeps the object's orientation in the frame (tilts under 45 deg)."""
+    q = np.array(quad, dtype=np.float32)
+    c = q.mean(axis=0)
+    q = c + (q - c) * (1 + 2 * margin)                       # same margin as the box crop, on every side
+    s, d = q.sum(axis=1), q[:, 1] - q[:, 0]
+    tl, br, tr, bl = q[np.argmin(s)], q[np.argmax(s)], q[np.argmin(d)], q[np.argmax(d)]
+    w = int(round(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl))))
+    h = int(round(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr))))
+    if w < 2 or h < 2:
+        return np.zeros((0, 0, 3), img.dtype)
+    M = cv2.getPerspectiveTransform(np.array([tl, tr, br, bl]), np.float32([[0, 0], [w, 0], [w, h], [0, h]]))
+    return cv2.warpPerspective(img, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+
+
+def _thickness(d: Detection) -> float:
+    """Spine thickness in px: the rotated rectangle's short side if known, else the box's."""
+    if d.quad:
+        q = np.array(d.quad)
+        return float(min(np.linalg.norm(q[1] - q[0]), np.linalg.norm(q[2] - q[1])))
+    x0, y0, x1, y1 = d.bbox
+    return float(min(x1 - x0, y1 - y0))
+
+
 def _upscale(crop: np.ndarray, cfg: Config) -> np.ndarray:
     text_h = 0.6 * min(crop.shape[:2])           # proxy: text height ~ 60% of spine thickness
     if text_h >= cfg.target_text_px or text_h <= 0:
@@ -127,7 +152,9 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
         s = Sighting(id=f"s_{frame.id[2:]}_{i:02d}", frame_id=frame.id, kind=d.kind, bbox=d.bbox,
                      layout=d.layout if d.kind == "book" else None,
                      shelf_hint=f"row{row_of[id(d)] + 1}" if d.kind == "book" else None)
-        crop = _crop(img, d.bbox, cfg.crop_margin)
+        crop = _crop_quad(img, d.quad, cfg.crop_margin) if d.kind == "book" and d.quad else None
+        if crop is None or crop.size == 0:
+            crop = _crop(img, d.bbox, cfg.crop_margin)
         q = quality.score(crop, cfg)
         s.crop_blur = q["blur"]
         x0, y0, x1, y1 = d.bbox
@@ -139,7 +166,7 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
                 s.raw_text, s.legible, s.rotation_deg = ps.raw_text, ps.legible, ps.rotation_deg
                 return s
         # Hard gates first: they skip the (paid) read entirely and feed the Coach.
-        if d.kind == "book" and 0.6 * min(x1 - x0, y1 - y0) < cfg.min_text_px:
+        if d.kind == "book" and 0.6 * _thickness(d) < cfg.min_text_px:
             s.reason = "too_far"
         else:
             s.reason = quality.failing_reason(q, cfg)
@@ -160,7 +187,8 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
                 elif d.layout == "cover_only":
                     s.reason = "stack_hidden"
                 else:
-                    m, rot, raw, legible, is_book = _read_book(crop, d.layout, d.bbox, vision, catalogue, cfg)
+                    m, rot, raw, legible, is_book = _read_book(crop, d.layout, (0, 0, crop.shape[1], crop.shape[0]),
+                                                                  vision, catalogue, cfg)   # aspect of the straightened crop
                     if not is_book:
                         log.info("dropped %s: the reader says it is not a book", s.id)
                         return None                  # not a book: never counted

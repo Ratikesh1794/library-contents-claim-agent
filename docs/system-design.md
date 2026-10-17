@@ -150,7 +150,7 @@ IDs are referenced by tests and the results sheet.
 |---|---|---|
 | Live voice | OpenAI Realtime (`gpt-realtime-mini`); Pipecat (SmallWebRTC transport, RNNoise, Silero VAD); browser WebRTC echo cancellation | Engine switch, volume-gate tuning, UI bridge (captions/state), tools, coaching messages |
 | Blur / glare / brightness | OpenCV | Thresholds, per-region aggregation |
-| Find and read spines | Vision LLM on upscaled crops; optional detector/segmenter (YOLO, Grounding DINO, SAM2) | Segment → orient → read flow, structured output, reason codes |
+| Find and read spines | Local detection: COCO YOLO11-seg (books) + YOLOE-seg open vocabulary (items), straightened crops in code; vision LLM only reads spine text / describes items | Detect → dedupe → crop → orient → read flow, structured output, reason codes |
 | Title to real book | Open Library, Google Books APIs | Strict title + author verification, ambiguity check, field-level edition/ISBN rules |
 | Metric scale | OpenCV ArUco | px to cm per shelf plane, cross-checks |
 | Room dimensions | RGB reconstruction model (e.g. VGGT, COLMAP); optional monocular metric depth as a cross-check | Plane fitting, scaling with marker, area math, fallbacks |
@@ -419,7 +419,7 @@ Every number answers "where did this come from?":
 | Duplicate counting across frames | Blows 5% count bar | Frame-to-frame tracking + same-work merge + evaluation per shelf |
 | Spine OCR wrong on small/rotated text | Confident-wrong titles | Strict title + author verification against one record, ambiguity check, high-res crops |
 | Background voices trigger the agent | Agent interrupts itself, answers the TV | Laptop-side RNNoise + volume-gated VAD (D18); hold-to-talk fallback |
-| Detector boxes non-books as books | Inflated count | `is_book` check in the read call (D19); local detector as upgrade |
+| Detector boxes non-books as books | Inflated count | `is_book` check in the read call (D19); local detector gives tight outlines (no invented boxes) |
 | Used-price sources thin in some countries | Many blanks/converted | Accept and label honestly; second country chosen for good coverage |
 | Live agent drifts into stating facts | Fabrication in speech | Prompt + tool-only fact path; voice summary read from the packet |
 | Overfitting to own room | Collapse at review | Test on a second, unseen shelf before submission |

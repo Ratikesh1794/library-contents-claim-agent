@@ -19,6 +19,9 @@ class Detection:
     bbox: BBox
     kind: str                      # "book" | "item"
     layout: str | None = None      # upright | flat | stacked | cover_only | unknown
+    quad: list[tuple[float, float]] | None = None   # rotated rectangle around the object's outline (4 corners, px)
+    label: str | None = None       # detector's class name, e.g. "chair" (a hint; the item category comes from describe)
+    conf: float = 1.0
 
 
 @dataclass
