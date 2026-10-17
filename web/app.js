@@ -2,12 +2,17 @@
 // Server contract: backend/live.py (HTTP + /ws/live) and backend/agent.py (message types). Tunables: CONFIG.
 "use strict";
 const CONFIG = {
-  keyframeEveryMs: 700,      // how often we consider sending a hi-res keyframe (consecutive frames must overlap for tracking)
+  keyframeEveryMs: 700,      // one keyframe window (consecutive keyframes must overlap for tracking)
+  sampleEveryMs: 120,        // inside a window, look at a frame this often and keep the sharpest
   video: { width: 3840, height: 2160 },   // requested camera resolution; the phone picks the closest it supports
-  sharpFloor: 30,            // Laplacian variance on the 320px copy; below this we skip the frame
+  // Sharpness = Laplacian variance of a full-resolution 512 px centre patch. A 320 px thumbnail of a 4K frame hides
+  // motion blur (a 10 px smear becomes < 1 px), so it can't be used to judge text. Scenes differ a lot, so the bar is
+  // relative: a window's best frame must reach sharpRel x the recent 75th percentile (and at least sharpFloor).
+  sharpFloor: 12, sharpRel: 0.5, sharpHistory: 40,
+  blurNudgeAfter: 3,         // this many rejected windows in a row -> "slow down" banner
   diffFloor: 8,              // mean abs diff vs last sent keyframe (0..255); below = same view
-  jpegQuality: 0.82, jpegQualityLow: 0.6,
-  maxSide: 2560,             // long side of uploaded keyframes, px (spine text stays readable; ~1 MB per frame)
+  jpegQuality: 0.85, jpegQualityLow: 0.6,
+  maxSide: 3840,             // long side of uploaded keyframes, px: keep the camera's full detail for small spine text
   maxBytes: 2_500_000,       // stay under the server's keyframe_max_bytes (3 MB, backend/config.py)
   queueMax: 20, queueSlow: 10, maxKeyframes: 400,
   coachBannerMs: 8000,
@@ -58,7 +63,7 @@ function renderInventory(m) {
 // ---------------------------------------------------------------- quality + keyframes (hi-res, to disk on the server)
 // Quality scores: same formulas as backend/quality.py, run on a 320px grayscale copy.
 function scoreFrame(v) {
-  const w = 320, h = Math.round((v.videoHeight / v.videoWidth) * w) || 180;
+  const w = 320, h = Math.round(((v.videoHeight || v.height) / (v.videoWidth || v.width)) * w) || 180;
   const c = scoreFrame.c || (scoreFrame.c = document.createElement("canvas")); c.width = w; c.height = h;
   const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(v, 0, 0, w, h);
   const d = g.getImageData(0, 0, w, h).data, gray = new Float32Array(w * h);
@@ -73,6 +78,22 @@ function scoreFrame(v) {
   let diff = 255;
   if (lastSmall) { diff = 0; for (let i = 0; i < gray.length; i += 7) diff += Math.abs(gray[i] - lastSmall[i]); diff /= gray.length / 7; }
   return { blur, glare: glare / (w * h), dark: sum / (w * h), diff, gray };
+}
+
+// Full-resolution sharpness of the centre patch (where the user aims). Laplacian variance, like scoreFrame.
+function patchSharpness(bmp) {
+  const p = Math.min(512, bmp.width, bmp.height);
+  const c = patchSharpness.c || (patchSharpness.c = document.createElement("canvas")); c.width = c.height = p;
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.drawImage(bmp, (bmp.width - p) / 2, (bmp.height - p) / 2, p, p, 0, 0, p, p);
+  const d = g.getImageData(0, 0, p, p).data, gray = new Float32Array(p * p);
+  for (let i = 0; i < p * p; i++) gray[i] = 0.299 * d[4 * i] + 0.587 * d[4 * i + 1] + 0.114 * d[4 * i + 2];
+  let m = 0, m2 = 0, n = 0;
+  for (let y = 1; y < p - 1; y++) for (let x = 1; x < p - 1; x++) {
+    const i = y * p + x, l = gray[i - 1] + gray[i + 1] + gray[i - p] + gray[i + p] - 4 * gray[i];
+    m += l; m2 += l * l; n++;
+  }
+  return m2 / n - (m / n) ** 2;
 }
 
 // Keyframes come from the live VIDEO stream (not ImageCapture.takePhoto(), which refocuses and fires the shutter
@@ -94,8 +115,7 @@ const ENCODER_SRC = `onmessage = async (e) => {
 let encoder = null;
 try { if (window.OffscreenCanvas && window.Worker) encoder = new Worker(URL.createObjectURL(new Blob([ENCODER_SRC], { type: "text/javascript" }))); } catch (e) { encoder = null; }
 
-async function grabJpeg(q) {
-  const bmp = await createImageBitmap(video);
+async function grabJpeg(bmp, q) {               // takes ownership of bmp (closes it)
   if (encoder) {                                   // off the main thread
     return await new Promise((resolve) => {
       encoder.onmessage = (e) => resolve(e.data);
@@ -115,15 +135,40 @@ async function grabJpeg(q) {
   return { blob, w: c.width, h: c.height };
 }
 
-async function keyframeTick() {
-  if (!sweepId || finished || xr || seq >= CONFIG.maxKeyframes || video.readyState < 2) return;   // paused while measuring
-  const s = scoreFrame(video);
-  if (s.blur < CONFIG.sharpFloor || s.diff < CONFIG.diffFloor) return;
+// Best-of-window: every sampleEveryMs grab the current video frame and keep it only if it is the sharpest so far in
+// this window; when the window closes, send that one frame if it is sharp enough. Panning blurs most frames, but the
+// short pauses between movements give sharp ones, and this catches them.
+let best = null, windowStart = 0, sharpHist = [], blurRun = 0, lastNudge = 0;
+
+async function sampleTick() {
+  if (!sweepId || finished || xr || seq >= CONFIG.maxKeyframes || video.readyState < 2) { best?.bmp.close(); best = null; return; }
+  const bmp = await createImageBitmap(video), sharp = patchSharpness(bmp);
+  sharpHist.push(sharp); if (sharpHist.length > CONFIG.sharpHistory) sharpHist.shift();
+  if (!best || sharp > best.sharp) { best?.bmp.close(); best = { bmp, sharp, t: (performance.now() - t0) / 1000 }; }
+  else bmp.close();
+  if (performance.now() - windowStart < interval) return;
+  windowStart = performance.now();
+  const b = best; best = null;
+  await commitKeyframe(b);
+}
+
+async function commitKeyframe(b) {
+  const p75 = [...sharpHist].sort((x, y) => x - y)[Math.floor(sharpHist.length * 0.75)] || 0;
+  if (b.sharp < Math.max(CONFIG.sharpFloor, CONFIG.sharpRel * p75)) {
+    b.bmp.close();
+    if (++blurRun >= CONFIG.blurNudgeAfter && performance.now() - lastNudge > 10000) {
+      lastNudge = performance.now(); showCoach("Too fast for sharp photos: pause on each shelf for a second.");
+    }
+    return;
+  }
+  blurRun = 0;
+  const s = scoreFrame(b.bmp);
+  if (s.diff < CONFIG.diffFloor) { b.bmp.close(); return; }       // same view as the last keyframe
   lastSmall = s.gray;
-  const { blob, w, h } = await grabJpeg(quality);
+  const { blob, w, h } = await grabJpeg(b.bmp, quality);
   if (!blob) return;
   if (queue.length >= CONFIG.queueMax) { console.warn("upload queue full: dropping oldest keyframe"); queue.shift(); }
-  queue.push({ seq: seq++, t: (performance.now() - t0) / 1000, blob, w, h, ...s });
+  queue.push({ seq: seq++, t: b.t, blob, w, h, ...s, sharp: b.sharp });
   if (queue.length > CONFIG.queueSlow) {           // adapt: lower quality + slow down
     quality = CONFIG.jpegQualityLow; interval = CONFIG.keyframeEveryMs * 2; setPill("Upload slow: go gently", "warn");
   } else { quality = CONFIG.jpegQuality; interval = CONFIG.keyframeEveryMs; }
@@ -146,7 +191,9 @@ async function pump() {                            // frames stay queued until t
   }
   sending = false;
 }
-function scheduleKeyframes() { keyframeTick().finally(() => sweepId && !finished && setTimeout(scheduleKeyframes, interval)); }
+function scheduleKeyframes() {
+  sampleTick().catch((e) => console.warn("keyframe sample:", e)).finally(() => sweepId && !finished && setTimeout(scheduleKeyframes, CONFIG.sampleEveryMs));
+}
 
 // ---------------------------------------------------------------- voice: WebRTC straight to OpenAI
 // The server only relays the SDP offer/answer (POST /api/sweeps/<id>/voice) and drives the agent "sideband".
