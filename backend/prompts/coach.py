@@ -25,3 +25,7 @@ BOOK_ASKS = {
     "partial": "Pan a little further so $what is fully in view.",
 }
 GIVE_UP = "I could not read $what. I will note it and move on."
+
+# Going back to books that were passed unread (backend/live/guide.py). $what = "the book" / "two books"; $where = "on your left".
+BACK_ASK = "I could not read $what you passed $where. Go back and hold steady on $it."
+BACK_WHERE = {"left": "on your left", "right": "on your right", "above": "higher up", "below": "lower down"}

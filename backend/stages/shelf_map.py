@@ -104,6 +104,7 @@ class ShelfMap:
         self.n_comp = 0
         self._next_id = 0
         self._last: tuple[int, np.ndarray] | None = None        # (component, outline on the map) of the last frame
+        self._view: tuple[np.ndarray, int, int] | None = None   # (H, w, h) of the last frame: map -> what the camera sees
         self.stats = {"frames": 0, "registered": 0, "new_components": 0, "repeats": 0, "pieces": 0, "new_books": 0,
                       "merged_components": 0, "merged_books": 0}
 
@@ -216,6 +217,19 @@ class ShelfMap:
         self.stats["merged_components"] += 1
         self.stats["merged_books"] += len(gone)
 
+    def locate(self, book: Book) -> tuple[float, float, int, int] | None:
+        """Where `book` is in the CURRENT camera view's pixel coordinates -> (x, y, frame w, frame h), or None if it is on
+        another map. x < 0 is off the left edge, x > w off the right, y < 0 above, y > h below: what the user sees."""
+        if self._view is None or self._last is None or book.comp != self._last[0]:
+            return None
+        H, w, h = self._view
+        try:
+            c = np.float32([[[(book.box[0] + book.box[2]) / 2, (book.box[1] + book.box[3]) / 2]]])
+            x, y = cv2.perspectiveTransform(c, np.linalg.inv(H)).reshape(2)
+        except (np.linalg.LinAlgError, cv2.error):
+            return None
+        return float(x), float(y), w, h
+
     # ---------------------------------------------------------------- frames
     def add_frame(self, img: np.ndarray, boxes: list[tuple[int, int, int, int]], frame_id: str | int = "") -> dict:
         """Register one frame and its detected book boxes.
@@ -247,6 +261,7 @@ class ShelfMap:
         if not self.keys or all(not (k.comp == comp and _poly_iou(foot, k.foot) > cfg.map_same_view) for k in self.keys):
             self.keys.append(_Key(pts, desc, H, foot, comp))     # a view we don't have yet
         self._last = (comp, foot)
+        self._view = (H, w, h)
 
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         owners: list[Book | None] = [None] * len(boxes)

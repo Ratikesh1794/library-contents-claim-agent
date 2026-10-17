@@ -9,13 +9,14 @@ Topics so far:
   slow   the phone could not get sharp frames (it moves too fast)                          on_blurry()
   book:* books in view that stay unreadable: hold steady / closer / glare / dark / blocked / pan   on_frame()
   giveup after `guide_book_asks` asks about a book: say we move on, then leave it alone    on_frame()
+  back   unreadable books that left the view: go back to them (which way, from the shelf map)   on_frame(tracker=...)
 """
 from __future__ import annotations
 
 from string import Template
 
 from backend.config import CFG, Config
-from backend.prompts.coach import BOOK_ASKS, GIVE_UP, GUIDE_ASKS
+from backend.prompts.coach import BACK_ASK, BACK_WHERE, BOOK_ASKS, GIVE_UP, GUIDE_ASKS
 
 NEVER = float("-inf")
 
@@ -89,13 +90,28 @@ class Guide:
         return {"type": "GUIDE", "key": "slow", "ask": texts[min(n, len(texts) - 1)]}
 
     # ---------------------------------------------------------------- books in view that stay unreadable
-    def on_frame(self, now: float, w: int, h: int, view: list, last_user_speech_t: float = NEVER) -> dict | None:
+    def on_frame(self, now: float, w: int, h: int, view: list, last_user_speech_t: float = NEVER,
+                 tracker=None) -> dict | None:
         """`view` = [(sighting, book)] for the latest frame. Speak about the books that stay unreadable while they are
-        in view; after `guide_book_asks` asks about a book, say once that we move on and stop asking about it."""
+        in view; after `guide_book_asks` asks about a book, say once that we move on and stop asking about it. With a
+        `tracker`, books passed unread (now out of view) are asked about last, when nothing in view needs attention."""
+        msg, about_to_ask = self._in_view(now, w, h, view, last_user_speech_t)
+        if msg is None and not about_to_ask and tracker is not None:
+            msg = self._come_back(now, tracker, view, last_user_speech_t)
+        return msg
+
+    @staticmethod
+    def _unresolved(m: dict) -> bool:
+        return m.get("read") is None and not m.get("not_book") and m.get("reason") in HOW
+
+    def _in_view(self, now: float, w: int, h: int, view: list, last_user_speech_t: float) -> tuple[dict | None, bool]:
+        """-> (message, about_to_ask): about_to_ask is True while a book in view is still in its settling window, so
+        something about it is likely to be said in a moment and 'go back' should wait."""
         c = self.cfg
-        pending = []
+        pending, about_to_ask = [], False
         for s, b in view:
             m = b.meta
+            m["seen_t"] = now                                      # last time it was in front of the camera
             fixable = (s.kind == "book" and not s.accepted and s.reason in HOW and not m.get("skip")
                        and not m.get("not_book") and m.get("read") is None)
             if not fixable:
@@ -103,28 +119,58 @@ class Guide:
                 continue
             m.setdefault("pending_since", now)
             if now - m["pending_since"] < c.guide_settle_s:        # give it a moment: the next frame may be sharper
+                about_to_ask = True
                 continue
             if now - m.get("asked_t", NEVER) < c.guide_book_gap_s:
                 continue
             pending.append((s, b))
         if not pending:
-            return None
+            return None, about_to_ask
         spent = [(s, b) for s, b in pending if b.meta.get("asked", 0) >= c.guide_book_asks]
         if spent:                                                  # asked enough: say so once, then leave them alone
             if self._gate(now, "giveup", 0.0, last_user_speech_t) is None:
-                return None
+                return None, about_to_ask
             for _, b in spent:
                 b.meta["skip"] = True
-            return {"type": "GUIDE", "key": "giveup",
-                    "ask": Template(GIVE_UP).substitute(what=where([cell(s.bbox, w, h) for s, _ in spent]))}
+            return ({"type": "GUIDE", "key": "giveup",
+                     "ask": Template(GIVE_UP).substitute(what=where([cell(s.bbox, w, h) for s, _ in spent]))}, about_to_ask)
         how = max({HOW[s.reason] for s, _ in pending}, key=lambda k: sum(1 for s, _ in pending if HOW[s.reason] == k))
         group = [(s, b) for s, b in pending if HOW[s.reason] == how]
         if self._gate(now, f"book:{how}", 0.0, last_user_speech_t) is None:
-            return None
+            return None, about_to_ask
         for _, b in group:
             b.meta["asked"], b.meta["asked_t"] = b.meta.get("asked", 0) + 1, now
-        return {"type": "GUIDE", "key": f"book:{how}",
-                "ask": Template(BOOK_ASKS[how]).substitute(what=where([cell(s.bbox, w, h) for s, _ in group]))}
+        return ({"type": "GUIDE", "key": f"book:{how}",
+                 "ask": Template(BOOK_ASKS[how]).substitute(what=where([cell(s.bbox, w, h) for s, _ in group]))}, about_to_ask)
+
+    def _come_back(self, now: float, tracker, view: list, last_user_speech_t: float) -> dict | None:
+        """Unreadable books that left the view: say which way they are. Direction comes from the shelf map, in what the
+        user sees (left/right/higher/lower), and only the nearest side is mentioned."""
+        c = self.cfg
+        near = []
+        for b, x, y, fw, fh in tracker.offscreen({id(b) for _, b in view}):
+            m = b.meta
+            if (not self._unresolved(m) or m.get("skip") or "seen_t" not in m or now - m["seen_t"] < c.guide_moved_on_s
+                    or m.get("recalled", 0) >= c.guide_back_asks
+                    or now - m.get("recalled_t", NEVER) < c.guide_back_gap_s):
+                continue
+            dx, dy = max(-x, x - fw, 0.0) / fw, max(-y, y - fh, 0.0) / fh
+            if max(dx, dy) < 0.1:                                  # still (nearly) in view
+                continue
+            side = ("left" if x < 0 else "right") if dx >= dy else ("above" if y < 0 else "below")
+            near.append((max(dx, dy), side, b))
+        if not near:
+            return None
+        side = min(near, key=lambda t: t[0])[1]
+        group = [b for _, sd, b in near if sd == side]
+        if self._gate(now, "back", c.guide_back_gap_s, last_user_speech_t) is None:
+            return None
+        for b in group:
+            b.meta["recalled"], b.meta["recalled_t"] = b.meta.get("recalled", 0) + 1, now
+        n = len(group)
+        what = "the book" if n == 1 else ({2: "two books", 3: "three books"}.get(n, "a few books"))
+        return {"type": "GUIDE", "key": "back", "ask": Template(BACK_ASK).substitute(
+            what=what, where=BACK_WHERE[side], it="it" if n == 1 else "them")}
 
     def skip(self, tracker, frame_id: str, region: str) -> int:
         """The user said 'skip this shelf': stop asking about the unreadable books in that row of the current view."""

@@ -123,6 +123,9 @@ class Config:
     guide_settle_s: float = 2.0          # a book must stay unreadable this long before we say anything about it
     guide_book_asks: int = 2             # times we ask about the same book before giving up on it
     guide_book_gap_s: float = 12.0       # minimum time between asks about the same book
+    guide_moved_on_s: float = 4.0        # a book must have been out of view this long before we ask to go back to it
+    guide_back_asks: int = 2             # times we ask to go back to the same book
+    guide_back_gap_s: float = 20.0       # minimum time between "go back" messages (and between asks for one book)
 
     # --- tracking / dedupe (backend/stages/track.py)
     track_max_side: int = 1024   # frames are downscaled to this for feature matching

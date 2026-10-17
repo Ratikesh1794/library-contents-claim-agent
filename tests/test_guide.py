@@ -125,3 +125,101 @@ def test_skip_this_shelf_silences_the_books_in_that_row():
     assert g.skip(T(v), "f", "row1") == 1
     m = g.on_frame(110.0, W, H, v)
     assert m and "on the left" not in m["ask"]                                   # row 1 is skipped, row 2 still asked about
+
+
+# ---------------------------------------------------------------- go back to books that were passed unread
+from backend.stages.book_tracker import BookTracker
+from tests.fakes import cand
+from tests.test_shelf_map import BOOKS, WIN, frame
+
+
+def sweep_sightings(x, unreadable=(0,)):
+    """The books in view at wall position x as sightings; the listed wall books could not be read."""
+    img, boxes = frame(x)
+    out = []
+    for (bx0, _, bx1, _), box in zip([b for b in BOOKS if min(b[2], x + WIN) - max(b[0], x) >= 15], boxes):
+        i = BOOKS.index(next(b for b in BOOKS if b[0] == bx0))
+        bad = i in unreadable
+        out.append(Sighting(id=f"s{x}_{i}", frame_id=f"f{x}", kind="book", bbox=box, shelf_hint="row1",
+                            reason="low_confidence" if bad else None, accepted=None if bad else cand(f"Book {i}")))
+    return img, out
+
+
+def walk(guide, tracker, xs, t0=100.0, dt=2.0, unreadable=(0,)):
+    said = []
+    for k, x in enumerate(xs):
+        img, ss = sweep_sightings(x, unreadable)
+        tracker.add_sightings(f"f{x}", img, ss)
+        m = guide.on_frame(t0 + k * dt, WIN, 700, tracker.view(f"f{x}"), tracker=tracker)
+        if m:
+            said.append((k, m))
+    return said
+
+
+def test_go_back_to_an_unreadable_book_you_passed_on_your_left():
+    said = walk(Guide(CFG), BookTracker(), [0, 300, 600, 900, 1200])
+    back = [(k, m) for k, m in said if m["key"] == "back"]
+    assert back and back[0][1]["ask"] == "I could not read the book you passed on your left. Go back and hold steady on it."
+    assert back[0][0] >= 2                                           # not the moment it left the view: it had to be out of view a while
+
+
+def test_sweeping_leftwards_the_passed_book_is_on_your_right():
+    said = walk(Guide(CFG), BookTracker(), [1500, 1200, 900, 600, 300], unreadable=(11,))
+    back = [m for _, m in said if m["key"] == "back"]
+    assert back and "on your right" in back[0]["ask"]
+
+
+def test_go_back_is_not_repeated_straight_away_and_stops_after_two_asks():
+    g = Guide(CFG)
+    t = BookTracker()
+    said = walk(g, t, [0, 300, 600, 900, 1200, 1500, 1200, 900, 600, 300, 0], dt=CFG.guide_back_gap_s + 1)
+    assert [m["key"] for _, m in said].count("back") <= CFG.guide_back_asks
+
+
+def test_a_book_read_in_the_meantime_is_never_asked_about():
+    tracker = BookTracker()
+    img, ss = sweep_sightings(0)
+    tracker.add_sightings("f0", img, ss)
+    for _, b in tracker.view("f0"):
+        if b.meta.get("reason"):
+            b.meta["read"] = ss[0]                                   # the tracker identified it from another frame
+    assert [m for _, m in walk(Guide(CFG), tracker, [300, 600, 900, 1200]) if m["key"] == "back"] == []
+
+
+def test_books_that_cannot_be_fixed_are_not_worth_going_back_for():
+    g, t = Guide(CFG), BookTracker()
+    img, ss = sweep_sightings(0)
+    ss[0].reason = "author_not_visible"                              # the spine just has no author on it
+    t.add_sightings("f0", img, ss)
+    g.on_frame(100.0, WIN, 700, t.view("f0"), tracker=t)
+    assert [m for _, m in walk(g, t, [300, 600, 900, 1200]) if m["key"] == "back"] == []
+
+
+def test_in_view_problems_come_before_going_back():
+    g, t = Guide(CFG), BookTracker()
+    said = walk(g, t, [0, 300, 600], unreadable=(0, 4))              # book 4 (wall x 780..880) is in view at 600 and unreadable
+    keys = [m["key"] for _, m in said]
+    assert "back" not in keys                                        # nothing about the passed book while one is in view
+
+
+def test_a_book_in_view_that_was_already_asked_about_does_not_block_going_back():
+    class T:
+        def __init__(self, items): self.items = items
+        def offscreen(self, in_view): return self.items
+    g = Guide(CFG)
+    s1, b1 = book(1)                                                 # in view, unreadable
+    b1.meta.update(seen_t=90.0, pending_since=90.0, asked=1, asked_t=95.0, reason="low_confidence")
+    far = Book(2, np.zeros(4), 0)                                    # passed 20 s ago, now off the left edge
+    far.meta.update(seen_t=80.0, reason="low_confidence")
+    m = g.on_frame(100.0, W, H, [(s1, b1)], tracker=T([(far, -500.0, 300.0, W, H)]))
+    assert m and m["key"] == "back" and "on your left" in m["ask"]
+
+
+def test_go_back_waits_while_a_book_in_view_is_about_to_be_asked_about():
+    class T:
+        def offscreen(self, in_view): return [(far, -500.0, 300.0, W, H)]
+    g = Guide(CFG)
+    s1, b1 = book(1)
+    far = Book(2, np.zeros(4), 0)
+    far.meta.update(seen_t=80.0, reason="low_confidence")
+    assert g.on_frame(100.0, W, H, [(s1, b1)], tracker=T()) is None          # b1 just appeared: its ask comes first

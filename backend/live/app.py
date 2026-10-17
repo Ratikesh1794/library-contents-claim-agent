@@ -223,7 +223,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
             s.last_frame_id = frame.id
             await push_inventory(s)
             # Tell the user about books in view that stay unreadable (hold steady / closer / glare ...), by where they are.
-            m = s.guide.on_frame(s.now(), frame.w, frame.h, s.tracker.view(frame.id), s.last_user_speech_t)
+            m = s.guide.on_frame(s.now(), frame.w, frame.h, s.tracker.view(frame.id), s.last_user_speech_t, s.tracker)
             if m:
                 await guide_say(s, m)
 

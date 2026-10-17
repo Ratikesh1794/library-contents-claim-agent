@@ -57,8 +57,10 @@ class BookTracker:
             self._records.append((s, book))
             if s.frame_id == self._view_frame:
                 self._view.append((s, book))
-            if s.accepted and "read" not in canonical(book).meta:
-                canonical(book).meta["read"] = s
+            m = canonical(book).meta
+            m["reason"] = None if s.accepted else s.reason          # latest word on why it is unresolved
+            if s.accepted and "read" not in m:
+                m["read"] = s
 
     def add_sightings(self, frame_id: str, img: np.ndarray, sightings: list[Sighting]) -> None:
         """Register the book sightings of a frame that was NOT detected here (copied from an earlier frame, or loaded
@@ -71,6 +73,19 @@ class BookTracker:
         """(sighting, book) for the books in `frame_id`, if it is the latest frame placed on the map (else empty)."""
         with self._lock:
             return [(s, canonical(b)) for s, b in self._view] if frame_id == self._view_frame else []
+
+    def offscreen(self, in_view_ids: set[int]) -> list[tuple[Book, float, float, int, int]]:
+        """Books on the current map that are not in the latest frame: (book, x, y, w, h) with x/y in the current view's
+        pixels (see ShelfMap.locate). Books on other maps (frames that never lined up) are left out."""
+        with self._lock:
+            out = []
+            for b in self.map.books:
+                if id(b) in in_view_ids:
+                    continue
+                loc = self.map.locate(b)
+                if loc is not None:
+                    out.append((b, *loc))
+            return out
 
     def groups(self) -> list[list[str]]:
         """Sighting ids per physical book (books with at least one sighting)."""

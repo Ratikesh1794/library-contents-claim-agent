@@ -77,3 +77,32 @@ def test_a_book_cut_in_two_by_the_detector_is_one_book():
     m.add_frame(img, boxes)
     assert m.count == len(frame(0)[1])
     assert len({id(o) for o in m.add_frame(img, boxes)['owners']}) == m.count     # every box has an owner, pieces share one
+
+
+def test_where_a_passed_book_is_relative_to_what_the_camera_sees_now():
+    m = ShelfMap()
+    for s in (0, 300, 600):                                        # sweeping right: book 0 (wall x 100..200) drops off the left
+        out = m.add_frame(*frame(s))
+    first = min(m.books, key=lambda b: b.box[0])                   # the leftmost registered book = wall book 0
+    x, y, w, h = m.locate(first)
+    assert x < 0 and 0 < y < h and w == WIN                        # off the left edge, at shelf height
+    in_view = out["owners"][-1]
+    xi, _, _, _ = m.locate(in_view)
+    assert 0 <= xi <= WIN                                          # a book that is in view is inside the frame
+
+
+def test_sweeping_the_other_way_puts_the_passed_book_on_the_right():
+    m = ShelfMap()
+    for s in (1500, 1200, 900, 600):
+        m.add_frame(*frame(s))
+    last = max(m.books, key=lambda b: b.box[0])                    # the rightmost book registered (wall book 11 or so)
+    x, _, w, _ = m.locate(last)
+    assert x > w
+
+
+def test_a_book_on_another_map_has_no_position():
+    m = ShelfMap()
+    m.add_frame(*frame(0))
+    m.add_frame(*frame(1500))                                      # shares nothing with the first: a separate map
+    other = next(b for b in m.books if b.comp == 0)                # a book of the first map; the camera is on the second
+    assert m.locate(other) is None
