@@ -75,6 +75,7 @@ class SweepSession:
     voice_task: asyncio.Task | None = None                          # sideband controller for that call
     tracker: BookTracker | None = None                              # shelf map: each book counted and read once
     guide: Guide | None = None                                      # proactive spoken guidance
+    last_frame_id: str = ""                                          # the latest frame analysed (what 'skip this shelf' refers to)
 
     def now(self) -> float:
         return time.time() - self.t0
@@ -108,6 +109,8 @@ class Hooks:
     def on_skip(self, region, action):
         if action == "skip":
             self.s.coach.close(region)
+            if self.s.tracker and self.s.guide:
+                self.s.guide.skip(self.s.tracker, self.s.last_frame_id, region)
             self.on_fact(region, "skip", None)
 
     async def on_finish(self):
@@ -217,14 +220,12 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
                               "books": len(books), "identified": sum(1 for x in books if x.accepted),
                               "items": sum(1 for x in sightings if x.kind == "item"),
                               "titles": [x.accepted.title for x in books if x.accepted][:6]})
+            s.last_frame_id = frame.id
             await push_inventory(s)
-            for m in s.coach.update(sightings, s.now(), s.last_user_speech_t):
-                await s.down.put(screen_event(m))
-                if m["type"] == "CAPTURE_ISSUE":
-                    s.guide.note_spoken(s.now())
-                    await s.inject.put(f"CAPTURE_ISSUE region={m['region']} reason={m['reason']} ask=\"{m['ask']}\"")
-                else:
-                    await s.inject.put(f"STATUS {m['text']}")
+            # Tell the user about books in view that stay unreadable (hold steady / closer / glare ...), by where they are.
+            m = s.guide.on_frame(s.now(), frame.w, frame.h, s.tracker.view(frame.id), s.last_user_speech_t)
+            if m:
+                await guide_say(s, m)
 
     def current_objects(s: SweepSession):
         """Same dedupe as the pipeline (books by the shelf map, items tracked), on the frames identified so far.

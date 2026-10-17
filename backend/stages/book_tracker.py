@@ -31,11 +31,15 @@ class BookTracker:
         self.map = ShelfMap(cfg)
         self._lock = threading.RLock()
         self._records: list[tuple[Sighting, Book]] = []
+        self._view_frame: str | None = None                      # the latest frame and the books in it (for guidance)
+        self._view: list[tuple[Sighting, Book]] = []
 
     # ---------------------------------------------------------------- map
     def register(self, frame_id: str, img: np.ndarray, boxes: list) -> list[Book | None]:
         """Place one frame's book boxes on the map -> the Book each box belongs to (None for all if the map failed:
         callers then simply read everything, as they did before the map existed)."""
+        with self._lock:
+            self._view_frame, self._view = frame_id, []
         if not boxes:
             return []
         with self._lock:
@@ -51,6 +55,8 @@ class BookTracker:
             return
         with self._lock:
             self._records.append((s, book))
+            if s.frame_id == self._view_frame:
+                self._view.append((s, book))
             if s.accepted and "read" not in canonical(book).meta:
                 canonical(book).meta["read"] = s
 
@@ -60,6 +66,11 @@ class BookTracker:
         books = [s for s in sightings if s.kind == "book"]
         for s, b in zip(books, self.register(frame_id, img, [s.bbox for s in books])):
             self.attach(s, b)
+
+    def view(self, frame_id: str) -> list[tuple[Sighting, Book]]:
+        """(sighting, book) for the books in `frame_id`, if it is the latest frame placed on the map (else empty)."""
+        with self._lock:
+            return [(s, canonical(b)) for s, b in self._view] if frame_id == self._view_frame else []
 
     def groups(self) -> list[list[str]]:
         """Sighting ids per physical book (books with at least one sighting)."""

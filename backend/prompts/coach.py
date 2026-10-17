@@ -14,3 +14,14 @@ GUIDE_ASKS = {
     "slow": ["Slow down a little. Pause on each shelf for a second.",
              "Still too blurry. Stop for a moment and hold the phone still."],
 }
+
+# What to say about books in view that could not be read. $what = "the books on the left" (backend/live/guide.py).
+BOOK_ASKS = {
+    "hold": "Hold steady on $what for a second.",
+    "closer": "Move a bit closer to $what.",
+    "glare": "Tilt the phone a little to cut the glare on $what.",
+    "dark": "It is too dark for $what. Can you turn on a light?",
+    "blocked": "Something is in front of $what. Move it, or shift to the side.",
+    "partial": "Pan a little further so $what is fully in view.",
+}
+GIVE_UP = "I could not read $what. I will note it and move on."

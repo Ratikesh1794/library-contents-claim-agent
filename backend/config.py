@@ -120,6 +120,9 @@ class Config:
     guide_gap_s: float = 6.0             # minimum time between any two spoken guidance messages
     guide_slow_gap_s: float = 15.0       # "slow down" at most this often
     guide_repeat_window_s: float = 60.0  # the same topic again within this window gets firmer wording
+    guide_settle_s: float = 2.0          # a book must stay unreadable this long before we say anything about it
+    guide_book_asks: int = 2             # times we ask about the same book before giving up on it
+    guide_book_gap_s: float = 12.0       # minimum time between asks about the same book
 
     # --- tracking / dedupe (backend/stages/track.py)
     track_max_side: int = 1024   # frames are downscaled to this for feature matching
