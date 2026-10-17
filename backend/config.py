@@ -126,6 +126,11 @@ class Config:
     guide_moved_on_s: float = 4.0        # a book must have been out of view this long before we ask to go back to it
     guide_back_asks: int = 2             # times we ask to go back to the same book
     guide_back_gap_s: float = 20.0       # minimum time between "go back" messages (and between asks for one book)
+    guide_tick_s: float = 2.0            # how often the session checks for progress / "area done" (no frame needed)
+    guide_progress_every: int = 10       # say how many books were found every this many new books
+    guide_progress_gap_s: float = 20.0   # ...and not more often than this
+    guide_idle_s: float = 15.0           # no new book and nothing needing attention for this long = "area looks done"
+    guide_idle_gap_s: float = 60.0       # ...said at most this often
 
     # --- tracking / dedupe (backend/stages/track.py)
     track_max_side: int = 1024   # frames are downscaled to this for feature matching

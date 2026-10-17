@@ -223,3 +223,62 @@ def test_go_back_waits_while_a_book_in_view_is_about_to_be_asked_about():
     far = Book(2, np.zeros(4), 0)
     far.meta.update(seen_t=80.0, reason="low_confidence")
     assert g.on_frame(100.0, W, H, [(s1, b1)], tracker=T()) is None          # b1 just appeared: its ask comes first
+
+
+# ---------------------------------------------------------------- progress and "this area looks done"
+def test_progress_is_announced_at_every_tenth_book_only():
+    g, said = Guide(CFG), []
+    for n in range(1, 26):
+        m = g.on_tick(100.0 + n * CFG.guide_progress_gap_s, n)       # a new book each tick, spaced far enough apart
+        if m:
+            said.append((n, m["ask"]))
+    assert said == [(10, "That is 10 books found so far. Keep going."), (20, "That is 20 books found so far. Keep going.")]
+
+
+def test_a_jump_past_a_milestone_is_announced_once_with_the_real_number():
+    g = Guide(CFG)
+    assert g.on_tick(100.0, 3) is None
+    assert g.on_tick(200.0, 27)["ask"] == "That is 27 books found so far. Keep going."
+    assert g.on_tick(300.0, 28) is None
+
+
+def test_the_area_looks_done_after_a_quiet_spell_and_never_before_any_book():
+    g = Guide(CFG)
+    assert g.on_tick(100.0, 0) is None and g.on_tick(500.0, 0) is None            # nothing found yet: nothing to be done with
+    g.on_tick(1000.0, 4)                                                          # four books found
+    assert g.on_tick(1000.0 + CFG.guide_idle_s - 1, 4) is None
+    m = g.on_tick(1000.0 + CFG.guide_idle_s + 1, 4)
+    assert m["key"] == "idle" and m["ask"].startswith("That area looks done") and "say finish" in m["ask"]
+
+
+def test_a_new_book_restarts_the_quiet_timer():
+    g = Guide(CFG)
+    g.on_tick(1000.0, 4)
+    assert g.on_tick(1000.0 + CFG.guide_idle_s - 1, 5) is None                    # a fifth book: still sweeping
+    assert g.on_tick(1000.0 + 2 * CFG.guide_idle_s - 2, 5) is None                # the clock restarted at that fifth book
+    assert g.on_tick(1000.0 + 2 * CFG.guide_idle_s, 5)["key"] == "idle"
+
+
+def test_not_done_while_a_book_in_view_still_needs_attention():
+    g = Guide(CFG)
+    g.on_tick(1000.0, 4)
+    s, b = book(1)
+    g.on_frame(1000.0 + CFG.guide_idle_s - 1, W, H, [(s, b)])                     # an unreadable book is in view right now
+    assert g.on_tick(1000.0 + CFG.guide_idle_s + 1, 4) is None                    # so the user is busy, not finished
+
+
+def test_not_done_straight_after_something_else_was_said():
+    g = Guide(CFG)
+    g.on_tick(1000.0, 4)
+    g.note_spoken(1000.0 + CFG.guide_idle_s - 1)                                  # e.g. "go back to the book on your left"
+    assert g.on_tick(1000.0 + CFG.guide_idle_s + 1, 4) is None
+
+
+def test_the_second_done_message_is_shorter_and_says_how_to_finish_and_they_are_spaced_out():
+    g = Guide(CFG)
+    g.on_tick(1000.0, 4)
+    t = 1000.0 + CFG.guide_idle_s + 1
+    first = g.on_tick(t, 4)["ask"]
+    assert g.on_tick(t + 5, 4) is None
+    second = g.on_tick(t + CFG.guide_idle_gap_s + 1, 4)["ask"]
+    assert first != second and second.startswith("Nothing new for a while")

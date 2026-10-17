@@ -167,6 +167,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
             s.hooks = Hooks(s, finish)
             s.tasks.append(asyncio.create_task(frame_worker(s)))
             s.tasks.append(asyncio.create_task(fanout(s)))
+            s.tasks.append(asyncio.create_task(guide_loop(s)))
             app.state.sessions[sweep_id] = s
         return s
 
@@ -186,6 +187,16 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
         """Show a guide message on the screens and have the agent say it."""
         await s.down.put(screen_event(m))
         await s.inject.put(f'GUIDE ask="{m["ask"]}"')
+
+    async def guide_loop(s: SweepSession):
+        """Progress and "this area looks done": checked on a timer, because a user who holds still sends no frames."""
+        while not s.finished:
+            await asyncio.sleep(cfg.guide_tick_s)
+            if s.phones <= 0 or s.tracker is None or s.finished:
+                continue
+            m = s.guide.on_tick(s.now(), s.tracker.count, s.last_user_speech_t)
+            if m:
+                await guide_say(s, m)
 
     async def frame_worker(s: SweepSession):
         """Identify keyframes as they arrive; update the panel and let the Coach react."""

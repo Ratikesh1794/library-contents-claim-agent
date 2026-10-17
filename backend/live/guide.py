@@ -10,13 +10,14 @@ Topics so far:
   book:* books in view that stay unreadable: hold steady / closer / glare / dark / blocked / pan   on_frame()
   giveup after `guide_book_asks` asks about a book: say we move on, then leave it alone    on_frame()
   back   unreadable books that left the view: go back to them (which way, from the shelf map)   on_frame(tracker=...)
+  progress / idle   how many books so far; "this area looks done, move on or say finish"        on_tick()
 """
 from __future__ import annotations
 
 from string import Template
 
 from backend.config import CFG, Config
-from backend.prompts.coach import BACK_ASK, BACK_WHERE, BOOK_ASKS, GIVE_UP, GUIDE_ASKS
+from backend.prompts.coach import BACK_ASK, BACK_WHERE, BOOK_ASKS, GIVE_UP, GUIDE_ASKS, IDLE, PROGRESS
 
 NEVER = float("-inf")
 
@@ -66,17 +67,23 @@ class Guide:
         self.last_t = NEVER                                # when anything was last spoken (also by the Coach)
         self.last_by: dict[str, float] = {}                # topic -> when it was last said
         self.count: dict[str, int] = {}                    # topic -> times in a row (escalates the wording)
+        self.best_count = 0                                # most books found so far
+        self.milestone = 0                                 # progress already announced up to this many multiples
+        self.progress_t = NEVER                            # when the book count last grew
+        self.busy_t = NEVER                                # when a book in view last needed attention
 
     def note_spoken(self, now: float) -> None:
         """Something else just spoke: keep the next guide message from landing on top of it."""
         self.last_t = max(self.last_t, now)
 
-    def _gate(self, now: float, key: str, gap: float, last_user_speech_t: float) -> int | None:
-        """May `key` be said now? -> how many times in a row it was said before (0 = first), or None for 'not now'."""
+    def _gate(self, now: float, key: str, gap: float, last_user_speech_t: float, window: float | None = None) -> int | None:
+        """May `key` be said now? -> how many times in a row it was said before (0 = first), or None for 'not now'.
+        Saying it again within `window` counts as 'in a row' (firmer wording)."""
         if (now - self.last_t < self.cfg.guide_gap_s or now - self.last_by.get(key, NEVER) < gap
                 or now - last_user_speech_t < 2.0):
             return None
-        n = self.count.get(key, 0) if now - self.last_by.get(key, NEVER) < self.cfg.guide_repeat_window_s else 0
+        window = self.cfg.guide_repeat_window_s if window is None else window
+        n = self.count.get(key, 0) if now - self.last_by.get(key, NEVER) < window else 0
         self.count[key] = n + 1
         self.last_t = self.last_by[key] = now
         return n
@@ -117,6 +124,7 @@ class Guide:
             if not fixable:
                 m.pop("pending_since", None)                       # read, skipped or not fixable: nothing to say
                 continue
+            self.busy_t = now                                      # the user is working on a book: not "done" yet
             m.setdefault("pending_since", now)
             if now - m["pending_since"] < c.guide_settle_s:        # give it a moment: the next frame may be sharper
                 about_to_ask = True
@@ -171,6 +179,29 @@ class Guide:
         what = "the book" if n == 1 else ({2: "two books", 3: "three books"}.get(n, "a few books"))
         return {"type": "GUIDE", "key": "back", "ask": Template(BACK_ASK).substitute(
             what=what, where=BACK_WHERE[side], it="it" if n == 1 else "them")}
+
+    # ---------------------------------------------------------------- progress and "this area looks done"
+    def on_tick(self, now: float, count: int, last_user_speech_t: float = NEVER) -> dict | None:
+        """Called every couple of seconds (not only when a frame arrives: a user holding still sends none).
+        `count` = distinct books found so far. Says how many were found every `guide_progress_every` books; after
+        `guide_idle_s` with no new book and nothing needing attention, says the area looks done."""
+        c = self.cfg
+        if count > self.best_count:
+            self.best_count, self.progress_t = count, now
+            if count // c.guide_progress_every > self.milestone:
+                self.milestone = count // c.guide_progress_every
+                if self._gate(now, "progress", c.guide_progress_gap_s, last_user_speech_t) is not None:
+                    return {"type": "GUIDE", "key": "progress", "ask": Template(PROGRESS).substitute(n=count)}
+            return None
+        if self.best_count == 0:
+            return None
+        quiet_since = max(self.progress_t, self.busy_t, self.last_t)   # nothing new, nothing wrong, nothing just said
+        if now - quiet_since < c.guide_idle_s:
+            return None
+        n = self._gate(now, "idle", c.guide_idle_gap_s, last_user_speech_t, window=3 * c.guide_idle_gap_s)
+        if n is None:
+            return None
+        return {"type": "GUIDE", "key": "idle", "ask": IDLE[min(n, len(IDLE) - 1)]}
 
     def skip(self, tracker, frame_id: str, region: str) -> int:
         """The user said 'skip this shelf': stop asking about the unreadable books in that row of the current view."""

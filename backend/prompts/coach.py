@@ -29,3 +29,8 @@ GIVE_UP = "I could not read $what. I will note it and move on."
 # Going back to books that were passed unread (backend/live/guide.py). $what = "the book" / "two books"; $where = "on your left".
 BACK_ASK = "I could not read $what you passed $where. Go back and hold steady on $it."
 BACK_WHERE = {"left": "on your left", "right": "on your right", "above": "higher up", "below": "lower down"}
+
+# Progress and "this area is done" (backend/live/guide.py). $n = books found so far.
+PROGRESS = "That is $n books found so far. Keep going."
+IDLE = ["That area looks done. Move on to the next shelf, or say finish when you have covered everything.",
+        "Nothing new for a while. Say finish when you are done."]

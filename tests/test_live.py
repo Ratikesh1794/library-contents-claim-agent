@@ -177,3 +177,22 @@ def test_the_phone_saying_it_is_too_blurry_gets_a_spoken_and_shown_slow_down(cli
         sess = client.app.state.sessions[sid]
         said = sess.inject.get_nowait()
         assert said.startswith('GUIDE ask="Slow down') and sess.inject.empty()
+
+
+def test_the_area_done_message_is_sent_on_a_timer_even_when_no_frames_arrive(tmp_path):
+    import time
+    cfg = dataclasses.replace(CFG, sweeps_dir=tmp_path, keyframe_max_bytes=300_000, guide_tick_s=0.2, guide_idle_s=1.0)
+    v = FakeVision([Detection((100, 50, 160, 450), "book", "upright")], reads=[SpineRead("Dune", "Frank Herbert", None, True)] * 4)
+    app = create_app(TOK, cfg, vision=v, catalogue=FakeCatalogue({"dune": [cand("Dune", "Frank Herbert")]}), voice=FakeVoice())
+    with TestClient(app) as c:
+        sid = c.post("/api/sweeps", json={}, headers=H).json()["sweep_id"]
+        with c.websocket_connect(f"/ws/live?sweep={sid}&t={TOK}"):                 # the phone is connected
+            c.post(f"/api/sweeps/{sid}/frames?seq=0&t=0&w=100&h=700", content=jpeg(), headers=H)   # one frame, then silence
+            sess, said = app.state.sessions[sid], []
+            for _ in range(80):
+                while not sess.inject.empty():
+                    said.append(sess.inject.get_nowait())
+                if any("looks done" in x for x in said):
+                    break
+                time.sleep(0.1)
+    assert any(x.startswith('GUIDE ask="That area looks done') for x in said)
