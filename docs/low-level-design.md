@@ -280,20 +280,37 @@ Coverage ("missed shelf"): maintain a coarse coverage map from segmented shelf r
 
 Tests: rate limit honoured; same region closed after two asks; resolved region stops asking; no ask for `stack_hidden`.
 
-## 7. Dedupe (`backend/stages/dedupe.py`, `backend/stages/track.py`)
+## 7. Dedupe and the shelf map (`dedupe.py`, `shelf_map.py`, `book_tracker.py`, `track.py`)
 
-Goal: one `Object` per physical book/item, never dropping an unidentified book. Input `sightings.json` + frames; output `objects.json` and `links.json` (cached frame alignments).
+Goal: one `Object` per physical book/item, never dropping an unidentified book. Input `sightings.json` + frames; output `objects.json`.
 
-1. **Frame links.** Each keyframe is aligned to the next `track_span` (2) keyframes: ORB features (2000, on a ≤1024 px copy), ratio test 0.75, RANSAC homography (6 px), at least 25 inliers, scale sanity 0.25–4. No overlap → no link.
-2. **Tracking.** Boxes of frame A are projected into frame B and matched greedily one-to-one to boxes of the same kind with IoU ≥ `track_iou` (0.3). Items are boxed loosely by the vision model, so for items "one box inside the other" also counts (`item_contain_weight` 0.6) when categories agree. Matched sightings are unioned.
+### 7.1 Books: count by position (`shelf_map.py`)
+
+A book is the same book if it sits in the same place on the shelf. That holds whichever way the camera moves (forward, backward, back to an earlier shelf), when the title can't be read, and for two identical copies side by side (two places = two books).
+
+1. **Register frames on a map.** Each frame gets a homography `H` (frame pixels -> map; the map is the first frame's plane) by matching ORB features (2000 on a ≤1024 px copy, ratio 0.75, RANSAC 6 px, ≥ 25 inliers, scale 0.25–4) against earlier keyframes that overlap it: the 4 nearest the previous frame, not just the previous frame. A frame that matches nothing nearby is searched against up to 300 earlier keyframes (time-boxed by `map_search_budget_s`, 2 s); still nothing = a new **component** (its own map). A frame that matches two components joins them (`_merge`, one transform) and folds the books seen in both together.
+2. **Place books.** A detected book box is projected onto the map. A box overlapping a registered book (IoU, or 0.7 x intersection over the smaller box, ≥ `map_match` 0.35) is that book (the largest view is kept as its box); otherwise a **leftover**: if it overlaps a registered book ≥ `map_absorb` (0.3), also one created a moment ago in the same frame, it is a piece of it (the detector cuts books in two, more at an angle) and is absorbed, else it is a new book. A whole view (not touching the frame edge) swallows earlier unfinished pieces of itself (a sliver cut on each side by two frames); a whole book inside a big box is never swallowed (neighbour).
+3. **Merges leave a trail.** A swallowed book keeps `into`, so `canonical(book)` is always the book to count. `meta` (what was read) travels with merges except "not a book".
+4. **Cost.** Keyframes are stored only for views not already stored (`map_same_view` 0.85). Measured: ~0.05 s per frame on a real sweep (max 0.4 s); the 15 books of a 54-frame sweep needed 14 registrations and 1 lost frame.
+
+`BookTracker` (`book_tracker.py`) owns one map per sweep plus the bookkeeping: which sighting belongs to which book (`groups()`) and what was read from each (`plan()`, `note_read()`). It is thread-safe (the reads of one frame run in parallel) and never lets a map error take the live path down (the frame is simply read as before).
+
+### 7.2 Read once per book (in `identify_frame`)
+
+Before reading, each book box is placed on the map; `plan()` then decides: **drop** (the reader already said not a book: never read again), **copy** (already identified in any earlier frame: reuse that read), **skip** (tried before and this crop is not at least `reread_gain` 1.5 x sharper, or `read_tries` 3 reads used) or **read**. The live worker and the batch pass share one tracker (the live session's, passed through `pipeline.run`); with none, the batch pass replays the frames already analysed into a fresh map first, so a book read live is never read again at the end. Carried frames (`carry_over`) are registered on the map too.
+
+### 7.3 Final grouping (`dedupe.run`)
+
+1. **Books:** `group_books` replays the frames in time order through a fresh `BookTracker` and unions each book's sightings. If a frame image is missing it falls back to frame-to-frame tracking for books.
+2. **Items** keep the older frame-to-frame tracking: each keyframe is aligned to the next `track_span` (2) keyframes (links cached in `links.json`); boxes of frame A projected into B match one-to-one by IoU ≥ `track_iou` (0.3), and for items "one box inside the other" also counts (`item_contain_weight`) when the categories agree.
 3. **Never merge two different works.** The union-find refuses to join groups holding different accepted titles.
-4. **Coming back to a shelf.** Groups with the same identified work that were never in the same frame are merged; seen side by side in one frame means two copies.
+4. **Same title in two groups = one book unless seen apart.** Two groups with the same identified work are merged, unless in some frame a sighting of each has a clearly separate box (overlap < `copy_overlap` 0.2): that is two copies side by side. Overlapping boxes of one title in one frame are the same book seen twice (whole and a piece, or at two zooms).
 5. **Identity.** A group takes its title from its best accepted read, so one good read names the book in every frame. Unidentified groups keep their most common reason.
 6. **Best sighting** per object (highest score, then sharpest crop) becomes `frame_ref`; shelf/position come from that frame's row clustering.
 
-This replaced the first design (link rows by neighbouring identified books). On a real sweep with almost no identified books, that method turned 97 sightings into 97 books; tracking gave 53.
+History: the first design linked rows by neighbouring identified books (97 sightings -> 97 books); frame-to-frame tracking gave 53; the shelf map is the third. On two real, badly blurred phone sweeps (old method: 198 "books" with 0 identified, and 0 books) the shelf map gives 15 books with 11 identified and 25 with 15 identified.
 
-Tests: an unread book tracked over 5 frames counts 1; one good read names a tracked book; frames without overlap never merge unread books; two copies side by side count 2; returning to a shelf doesn't double count; a bad link never merges two titles; loosely boxed items track, different categories don't.
+Tests: `test_shelf_map.py` (synthetic wall with 12 books and a camera that moves: forward, backward, forward then back, repeated frames, uneven moves with returns, a jump bridged later, a book cut in two by the detector); `test_book_tracker.py` (read once, non-book dropped, retry rules, never-read book counted once, fallback with a missing image, no re-read in the batch pass); `test_dedupe.py` (tracking, merging, copies); `test_live.py` (the same view sent three times stays one book).
 
 ## 8. Measure
 
@@ -456,6 +473,9 @@ Overridable in `.env`: model names, `VOICE`, `VOICE_ENGINE`, `NOISE_FILTER`, `VA
 ## 15. Known weak points to watch in the failure log
 
 - Segmentation boxes that merge two thin books or split one thick book.
+- A wrong read on a blurry, far crop is copied to every later sighting of that book (read once). Seen on real sweeps: two different spines both read as one title; a dark spine read as a title that belongs to its neighbour.
+- The shelf map assumes a flat shelf front; a frame that lines up with nothing starts a new map, and books on the far side of a gap are counted again until a later frame joins the maps.
+- Items (chairs, cabinets...) are still described once per sighting in every analysed frame: they are the largest remaining model cost.
 - Marker not coplanar with spine fronts (deep shelves): systematic dims bias.
 - Reconstruction on plain white walls; fast panning.
 - Catalogue misses for regional or older titles (leads to honest `unidentified`).

@@ -190,23 +190,30 @@ def build_objects(sightings: list[Sighting], frames: list[Frame],
                 if book_groups is None or sa.kind == "item":
                     g.union(sa.id, sb.id)
 
-    # 3. same identified work in groups that were never in the same frame => the user came back to it
+    # 3. the same identified work in two groups is ONE book, unless the two were seen apart from each other in a frame
+    # (clearly separate boxes side by side = two copies). Overlapping boxes of one title in one frame are the same book
+    # seen twice (whole and a piece, or at two zooms), not two copies.
     groups = g.groups()
     frames_of = {root: {by_id[i].frame_id for i in ids} for root, ids in groups.items()}
+    members = {root: [by_id[i] for i in ids] for root, ids in groups.items()}
+
+    def apart(a: str, b: str) -> bool:
+        return any(sa.frame_id == sb.frame_id and _overlap(sa.bbox, sb.bbox) < cfg.copy_overlap
+                   for sa in members[a] for sb in members[b])
     by_key: dict[str, list[str]] = defaultdict(list)
     for root, ids in groups.items():
         keys = g.keys.get(root) or set()
         if len(keys) == 1 and by_id[ids[0]].kind == "book":
             by_key[next(iter(keys))].append(root)
     for roots in by_key.values():
-        copies: list[tuple[set[str], list[str]]] = []          # (frames seen in, groups) per physical copy
+        copies: list[list[str]] = []                           # each entry: the groups that are one physical copy
         for r in sorted(roots, key=lambda root: min(fr[f].t for f in frames_of[root])):
-            c = next((c for c in copies if not (c[0] & frames_of[r])), None)
+            c = next((c for c in copies if not any(apart(r, x) for x in c)), None)
             if c:
-                c[0].update(frames_of[r]); c[1].append(r)
+                c.append(r)
             else:
-                copies.append((set(frames_of[r]), [r]))
-        for _, rs in copies:
+                copies.append([r])
+        for rs in copies:
             for r in rs[1:]:
                 g.union(rs[0], r)
 

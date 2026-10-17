@@ -82,6 +82,7 @@ class Config:
     map_same_view: float = 0.85    # a frame this much like a stored keyframe is not stored again
     map_match: float = 0.35        # overlap with a registered book that makes a detection that book
     map_absorb: float = 0.3        # overlap that makes a leftover box a piece of a registered book
+    copy_overlap: float = 0.2      # two boxes of one title in one frame overlapping less than this = two copies (side by side)
 
     # --- identify
     min_box_px: int = 900
