@@ -104,3 +104,29 @@ def test_the_batch_pass_does_not_re_read_a_book_the_live_pass_already_read(tmp_p
     assert v.read_calls == 1                                   # only B was read; A came from the rebuilt shelf map
     got = {s.bbox: s.accepted.title for s in store.read(sd, "sightings/f_0001.json", list[Sighting])}
     assert got == {A: "Dune", B: "Emma"}                       # had A been read again it would have become "Emma"
+
+
+def test_a_read_is_not_copied_to_a_crop_that_looks_like_a_different_book():
+    t = BookTracker()
+    b = Book(0, np.zeros(4), 0)
+    t.note_read(b, 100, sig=(60.0, 10.0, 10.0))                      # what the book that was read looks like
+    ok = Sighting(id="s", frame_id="f", kind="book", bbox=(0, 0, 1, 1), accepted=cand("Dune"))
+    t.attach(ok, b)
+    assert t.plan(b, 100, (62.0, 12.0, 8.0))[0] == "copy"            # same colours: the same book
+    assert t.plan(b, 100, (30.0, 60.0, -40.0))[0] == "read"          # clearly different colours: look at it, don't copy
+    assert t.plan(b, 100, None)[0] == "copy"                         # no signature = no objection
+
+
+def test_a_box_that_lands_on_a_read_book_but_shows_another_book_is_read_not_copied(tmp_path):
+    import cv2
+    sd, frames = same_view(tmp_path, 2)
+    img = cv2.imread(str(sd / frames[1].path))                       # frame 1: a much darker book where the first one was
+    x0, y0, x1, y1 = UPRIGHT.bbox
+    img[y0:y1, x0:x1] = np.random.default_rng(5).integers(0, 40, (y1 - y0, x1 - x0, 3)).astype(np.uint8)
+    cv2.imwrite(str(sd / frames[1].path), img)
+    v = FakeVision([UPRIGHT], reads=[SpineRead("Dune", "Frank Herbert", None, True), SpineRead("Emma", "Jane Austen", None, True)])
+    cat = FakeCatalogue({"dune": [cand("Dune", "Frank Herbert")], "emma": [cand("Emma", "Jane Austen")]})
+    t = BookTracker()
+    first = identify.identify_frame(sd, frames[0], v, cat, CFG, tracker=t)
+    second = identify.identify_frame(sd, frames[1], v, cat, CFG, tracker=t)
+    assert first[0].accepted.title == "Dune" and second[0].accepted.title == "Emma"      # a copy would have said "Dune"

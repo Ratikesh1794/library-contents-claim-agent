@@ -71,3 +71,40 @@ def test_crop_the_reader_says_is_not_a_book_is_dropped(tmp_path):
     v = FakeVision([UPRIGHT], reads=[SpineRead(None, None, None, False, is_book=False)])
     c = FakeCatalogue({})
     assert run_one(tmp_path, v, c) == [] and c.calls == 0      # e.g. a perfume box: never counted, never priced
+
+
+# ---- wrong reads that used to be accepted
+def test_a_garbled_orientation_cannot_override_a_different_legible_read(tmp_path):
+    # orientation 1 reads a different title (legible, not in the catalogue); orientation 2 "reads" a famous one from garbage
+    v = FakeVision([UPRIGHT], reads=[SpineRead("The Philosophy of Science", "Karl Popper", None, True),
+                                     SpineRead("The Art of War", "Sun Tzu", None, True)])
+    s = run_one(tmp_path, v, FakeCatalogue({"the art of war": [cand("The Art of War", "Sun Tzu")]}))[0]
+    assert s.accepted is None and s.reason == "low_confidence"
+
+
+def test_a_garbage_first_orientation_does_not_stop_the_right_read_being_accepted(tmp_path):
+    v = FakeVision([UPRIGHT], reads=[SpineRead(None, None, None, False), SpineRead("Dune", "Frank Herbert", None, True)])
+    s = run_one(tmp_path, v, FakeCatalogue({"dune": [cand("Dune", "Frank Herbert")]}))[0]
+    assert s.accepted and s.accepted.title == "Dune"
+
+
+def test_two_orientations_that_agree_are_fine(tmp_path):
+    import dataclasses
+    cfg = dataclasses.replace(CFG, orient_early_exit=False)
+    v = FakeVision([UPRIGHT], reads=[SpineRead("The Art of War", "Sun Tzu", None, True)] * 2)
+    sd, frames = make_sweep(tmp_path)
+    s = identify.identify_frame(sd, frames[0], v, FakeCatalogue({"the art of war": [cand("The Art of War", "Sun Tzu")]}), cfg)[0]
+    assert s.accepted and s.accepted.title == "The Art of War"
+
+
+def test_one_box_around_several_books_is_dropped_but_a_lone_big_book_is_not(tmp_path):
+    spines = [Detection((40 + 70 * i, 50, 100 + 70 * i, 450), "book", "upright") for i in range(5)]   # five 60 x 400 spines
+    group = Detection((20, 40, 420, 460), "book", "upright")                                         # 400 x 420: 7x a spine, squarish
+    v = FakeVision(spines + [group], reads=[SpineRead(None, None, None, False)] * 40)
+    sd, frames = make_sweep(tmp_path)
+    assert len(identify.identify_frame(sd, frames[0], v, FakeCatalogue({}), CFG)) == 5
+    lone = FakeVision([Detection((20, 40, 420, 460), "book", "upright")], reads=[SpineRead(None, None, None, False)] * 4)
+    assert len(identify.identify_frame(sd, frames[0], lone, FakeCatalogue({}), CFG)) == 1                 # nothing to compare with
+    cover = Detection((20, 40, 300, 440), "book", "upright")                                              # a face-out cover: 280 x 400
+    face = FakeVision(spines + [cover], reads=[SpineRead(None, None, None, False)] * 40)
+    assert len(identify.identify_frame(sd, frames[0], face, FakeCatalogue({}), CFG)) == 6                 # ~4.7x a spine: kept

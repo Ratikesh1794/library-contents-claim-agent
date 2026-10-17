@@ -190,16 +190,19 @@ def build_objects(sightings: list[Sighting], frames: list[Frame],
                 if book_groups is None or sa.kind == "item":
                     g.union(sa.id, sb.id)
 
-    # 3. the same identified work in two groups is ONE book, unless the two were seen apart from each other in a frame
-    # (clearly separate boxes side by side = two copies). Overlapping boxes of one title in one frame are the same book
+    # 3. the same identified work in two groups is ONE book, unless the two were seen apart from each other in at least
+    # `copy_min_frames` frames (clearly separate boxes side by side = two copies). Overlapping boxes of one title in one frame are the same book
     # seen twice (whole and a piece, or at two zooms), not two copies.
     groups = g.groups()
     frames_of = {root: {by_id[i].frame_id for i in ids} for root, ids in groups.items()}
     members = {root: [by_id[i] for i in ids] for root, ids in groups.items()}
 
     def apart(a: str, b: str) -> bool:
-        return any(sa.frame_id == sb.frame_id and _overlap(sa.bbox, sb.bbox) < cfg.copy_overlap
-                   for sa in members[a] for sb in members[b])
+        """Two copies of one title: clearly separate boxes side by side in at least `copy_min_frames` frames. A single
+        frame can be a ghost (motion blur doubles a spine, shifted by about its own width)."""
+        frames_apart = {sa.frame_id for sa in members[a] for sb in members[b]
+                        if sa.frame_id == sb.frame_id and _overlap(sa.bbox, sb.bbox) < cfg.copy_overlap}
+        return len(frames_apart) >= cfg.copy_min_frames
     by_key: dict[str, list[str]] = defaultdict(list)
     for root, ids in groups.items():
         keys = g.keys.get(root) or set()

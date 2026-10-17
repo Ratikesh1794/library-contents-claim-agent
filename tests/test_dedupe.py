@@ -83,3 +83,15 @@ def test_evidence_prefers_a_detected_box_over_a_carried_copy():
     copy = book(1, 70, "Dune").model_copy(update={"carried_from": real.id, "crop_blur": 999.0})
     objs = build_objects([real, copy], [fr(0), fr(1)], {("f_0000", "f_0001"): shift(-30)})
     assert len(objs) == 1 and objs[0].frame_ref == "frames/f_0000.jpg"
+
+
+def test_a_title_seen_twice_apart_in_only_one_frame_is_a_ghost_not_a_second_copy():
+    # one blurry frame shows the same spine twice, shifted by about its own width; the other frames show it once
+    ss = [book(0, 100, "Dune"), book(1, 70, "Dune"), book(2, 40, "Dune"), book(1, 130, "Dune")]
+    objs = build_objects(ss, [fr(0), fr(1), fr(2)], {("f_0000", "f_0001"): shift(-30), ("f_0001", "f_0002"): shift(-30)})
+    assert len(objs) == 1
+
+
+def test_the_same_pair_apart_in_two_frames_is_two_copies():
+    ss = [book(0, 100, "Dune"), book(0, 150, "Dune"), book(1, 70, "Dune"), book(1, 120, "Dune")]
+    assert len(build_objects(ss, [fr(0), fr(1)], {("f_0000", "f_0001"): shift(-30)})) == 2

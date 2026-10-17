@@ -35,9 +35,18 @@ def token_set_ratio(a: str | None, b: str | None) -> float:
                r(None, s1, s2).ratio())
 
 
+def author_surname(author: str | None) -> str:
+    """'M. J. DeMarco', 'MJ DeMarco', 'DeMarco, M. J.' and 'Marc DeMarco' -> 'demarco': the same person however a
+    catalogue spells the initials or orders the name. (Used to decide two records are the same work.)"""
+    a = author or ""
+    first = a.split(",")[0] if "," in a else a
+    toks = norm(first).split()
+    return toks[-1] if toks else ""
+
+
 def work_key(c: Candidate) -> str:
-    """Identity of a *work* (editions of one book collapse to one key)."""
-    return norm(c.title) + "|" + norm((c.author or "").split(",")[0])
+    """Identity of a *work* (editions of one book collapse to one key): title + the author's surname."""
+    return norm(c.title) + "|" + author_surname(c.author)
 
 
 def _main_title(title: str) -> str:

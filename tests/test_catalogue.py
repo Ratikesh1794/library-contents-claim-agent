@@ -63,3 +63,13 @@ def test_edition_year_and_isbn_only_when_verified():
 def test_illegible_spine_makes_no_call():
     m, c = resolve(read(None, legible=False), [cand("Dune", "Frank Herbert")])
     assert m.candidate is None and c.calls == 0
+
+
+def test_one_work_whatever_the_catalogue_does_to_the_authors_name():
+    from backend.stages.catalogue import work_key
+    from tests.fakes import cand
+    keys = {work_key(cand("The Millionaire Fastlane", a)) for a in ("M. J. DeMarco", "MJ DeMarco", "DeMarco, M. J.", "MJ DeMarco ")}
+    assert len(keys) == 1
+    assert work_key(cand("Dune", "Frank Herbert")) == work_key(cand("Dune", "Herbert, Frank"))
+    assert work_key(cand("Dune", "Frank Herbert")) != work_key(cand("Dune Messiah", "Frank Herbert"))     # a different work
+    assert work_key(cand("Emma", "Jane Austen")) != work_key(cand("Emma", "Emma Thompson"))               # a different author

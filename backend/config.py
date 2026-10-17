@@ -82,12 +82,18 @@ class Config:
     map_same_view: float = 0.85    # a frame this much like a stored keyframe is not stored again
     map_match: float = 0.35        # overlap with a registered book that makes a detection that book
     map_absorb: float = 0.3        # overlap that makes a leftover box a piece of a registered book
-    copy_overlap: float = 0.2      # two boxes of one title in one frame overlapping less than this = two copies (side by side)
+    copy_overlap: float = 0.2      # two boxes of one title in one frame overlapping less than this = apart (side by side)
+    copy_min_frames: int = 2       # ...and they must be seen apart in this many frames to be two copies (one frame can be a blur ghost)
+    copy_color_max: float = 35.0   # a read is copied to a new sighting only if its crop looks this much like the one that was read (Lab)
 
     # --- identify
     min_box_px: int = 900
     max_spine_aspect: float = 40.0
     occl_iou: float = 0.3
+    rotation_conflict_T: float = 0.6   # two orientations read titles this dissimilar = contradiction: not identified
+    group_min_books: int = 4           # a frame needs this many books before an oversized box can be called a group
+    group_area_factor: float = 6.0     # ...a book box this many times the median area...
+    group_max_aspect: float = 2.0      # ...and squarish (a single spine is long and thin) is one box around several books
     # Strict identity (catalogue.resolve): a book is identified ONLY if the title AND the author read from the
     # spine both match the same catalogue record; anything else stays undefined (None). Never a guess.
     title_match_T: float = 0.85    # read title vs record title (or its main title before a subtitle), symmetric

@@ -100,16 +100,27 @@ class BookTracker:
         return len(self.groups())
 
     # ---------------------------------------------------------------- read once
-    def plan(self, book: Book | None, sharp: float) -> tuple[str, Sighting | None]:
-        """What to do with a crop of `book` whose sharpness is `sharp`:
+    def _same_look(self, m: dict, sig) -> bool:
+        """Does a crop with colour signature `sig` look like the crop that was read? The map can drift, and then a box
+        of a DIFFERENT book lands on a registered one: copying the read would give it the wrong identity without ever
+        looking at it. No signature on either side = no objection."""
+        known = m.get("sig")
+        if known is None or sig is None:
+            return True
+        return float(np.linalg.norm(np.subtract(known, sig))) <= self.cfg.copy_color_max
+
+    def plan(self, book: Book | None, sharp: float, sig=None) -> tuple[str, Sighting | None]:
+        """What to do with a crop of `book` whose sharpness is `sharp` and colour signature `sig`:
         ("drop", None)   the reader already said this is not a book
         ("copy", read)   already identified: reuse that read
         ("skip", None)   tried before and this crop isn't clearly better: don't pay for another read
-        ("read", None)   read it"""
+        ("read", None)   read it (also when the crop does not look like the book that was read: see _same_look)"""
         if book is None:
             return "read", None
         with self._lock:
             m = canonical(book).meta
+            if not self._same_look(m, sig):
+                return "read", None
             if m.get("not_book"):
                 return "drop", None
             if m.get("read") is not None:
@@ -119,11 +130,13 @@ class BookTracker:
                 return "skip", None
             return "read", None
 
-    def note_read(self, book: Book | None, sharp: float, is_book: bool = True) -> None:
+    def note_read(self, book: Book | None, sharp: float, is_book: bool = True, sig=None) -> None:
         if book is None:
             return
         with self._lock:
             m = canonical(book).meta
+            if sig is not None:
+                m.setdefault("sig", tuple(float(v) for v in sig))     # what the book that was read looks like
             m["tries"] = m.get("tries", 0) + 1
             m["sharp"] = max(m.get("sharp", 0.0), sharp)
             if not is_book:

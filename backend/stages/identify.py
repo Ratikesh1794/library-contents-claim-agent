@@ -112,6 +112,7 @@ def _read_book(crop: np.ndarray, layout, bbox, vision: Vision, catalogue: Catalo
     If the model says the crop is not a book at all (bottle, box, DVD...), stop and report is_book=False."""
     tried: list[tuple[cat.Match, int]] = []
     raw, legible = None, False
+    titles_read: list[str] = []                  # every legible multi-word title read in any orientation
     for rot in _rotations(layout, bbox, cfg):
         img = crop if rot == 0 else cv2.rotate(crop, _ROT[rot])
         try:
@@ -124,6 +125,8 @@ def _read_book(crop: np.ndarray, layout, bbox, vision: Vision, catalogue: Catalo
         if read.legible:
             legible = True
             raw = raw or " | ".join(x for x in (read.title, read.author) if x) or None
+            if len(cat.norm(read.title).split()) >= 2:
+                titles_read.append(read.title)
         m = cat.resolve(read, catalogue, cfg)
         tried.append((m, rot))
         if m.candidate and cfg.orient_early_exit:
@@ -135,7 +138,38 @@ def _read_book(crop: np.ndarray, layout, bbox, vision: Vision, catalogue: Catalo
         m, r = max(tried, key=lambda t: t[0].score)
         return cat.Match(None, 0.0, "low_confidence", m.candidates), r, raw, legible, True
     m, r = max(accepted or tried, key=lambda t: t[0].score)
+    # A garbled orientation can make the reader complete a FAMOUS title from memory ("The Art of War | Sun Tzu") that
+    # matches the catalogue exactly. If another orientation gave a legible, clearly different title, the two readings
+    # contradict each other and neither can be trusted: undefined, never a guess.
+    if m.candidate and any(cat.title_score(t, m.candidate.title) < cfg.rotation_conflict_T for t in titles_read):
+        log.info("rotations disagree about the title (%s vs %s): not identified", titles_read, m.candidate.title)
+        return cat.Match(None, 0.0, "low_confidence", m.candidates), r, raw, legible, True
     return m, r, raw, legible, True
+
+
+def _signature(crop: np.ndarray) -> tuple[float, float, float] | None:
+    """Mean Lab colour of the middle of a crop: what the book looks like, for BookTracker._same_look."""
+    h, w = crop.shape[:2]
+    mid = crop[h // 5: h - h // 5, w // 5: w - w // 5]
+    if mid.size == 0:
+        return None
+    return tuple(float(v) for v in cv2.cvtColor(mid, cv2.COLOR_BGR2LAB).reshape(-1, 3).mean(0))
+
+
+def _drop_group_boxes(dets: list[Detection], cfg: Config) -> list[Detection]:
+    """One box around several books is not a book: its text is whatever title the reader sees first. Dropped when it is
+    far larger than the typical book in the frame and squarish (a single spine is long and thin); needs a few other
+    books to compare with, so a lone big book close to the camera is safe."""
+    books = [d for d in dets if d.kind == "book"]
+    if len(books) < cfg.group_min_books:
+        return dets
+    area = lambda d: (d.bbox[2] - d.bbox[0]) * (d.bbox[3] - d.bbox[1])
+    med = float(np.median([area(d) for d in books]))
+    aspect = lambda d: max(d.bbox[2] - d.bbox[0], d.bbox[3] - d.bbox[1]) / max(1, min(d.bbox[2] - d.bbox[0], d.bbox[3] - d.bbox[1]))
+    out = [d for d in dets if not (d.kind == "book" and area(d) > cfg.group_area_factor * med and aspect(d) < cfg.group_max_aspect)]
+    if len(out) < len(dets):
+        log.info("dropped %d box(es) around several books", len(dets) - len(out))
+    return out
 
 
 def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
@@ -146,7 +180,7 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
     Without one, `prev` (previous frame, its sightings) gives the older "reuse from the last frame" shortcut."""
     img = store.load_image(sd, frame.path)
     H, W = img.shape[:2]
-    dets = [d for d in vision.detect(img) if _valid(d, cfg)]
+    dets = _drop_group_boxes([d for d in vision.detect(img) if _valid(d, cfg)], cfg)
     books = [d for d in dets if d.kind == "book"]
     rows = assign_rows([d.bbox for d in books])
     row_of = {id(d): r for d, r in zip(books, rows)}
@@ -171,9 +205,10 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
             if tracker is not None and sg.kind == "book":
                 tracker.attach(sg, tb)
             return sg
-        plan = None
+        plan, sig = None, None
         if d.kind == "book" and tracker is not None:         # read once per physical book, whatever frame it was read in
-            plan, known = tracker.plan(tb, q["blur"])
+            sig = _signature(crop)
+            plan, known = tracker.plan(tb, q["blur"], sig)
             if plan == "drop":
                 return None                                  # already known not to be a book
             if plan == "copy":
@@ -213,7 +248,7 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
                     m, rot, raw, legible, is_book = _read_book(crop, d.layout, (0, 0, crop.shape[1], crop.shape[0]),
                                                                   vision, catalogue, cfg)   # aspect of the straightened crop
                     if tracker is not None:
-                        tracker.note_read(tb, q["blur"], is_book)
+                        tracker.note_read(tb, q["blur"], is_book, sig)
                     if not is_book:
                         log.info("dropped %s: the reader says it is not a book", s.id)
                         return None                  # not a book: never counted
