@@ -23,6 +23,7 @@ CURRENCY = {"US": "USD", "GB": "GBP", "UK": "GBP", "DE": "EUR", "FR": "EUR", "IT
 
 
 def compare(sd: Path, country: str, currency: str, limit: int = 10, source=None, fx=None) -> list[dict]:
+    """Price the first `limit` identified books for the sweep's own country and for `country`/`currency`."""
     sd = Path(sd)
     meta = store.read(sd, "meta.json", dict, default={})
     objs = [o for o in store.read(sd, "objects.json", list[Object], default=[]) if o.kind == "book" and o.title][:limit]

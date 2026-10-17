@@ -62,7 +62,7 @@ class Sighting(BaseModel):
     candidates: list[Candidate] = []      # catalogue matches with scores
     reason: Reason | None = None
     shelf_hint: str | None                # region id from Coach/segmenter
-    item: ItemGuess | None                # category/material/brand if kind=item
+    item: ItemGuess | None                # category, name ("office chair": the price query and the packet's description), material, brand_model, dims_hint
 
 class Candidate(BaseModel):
     title: str; author: str | None; isbn: str | None
@@ -72,7 +72,7 @@ class UserFact(BaseModel):
     ref: str | None; text: str; turn_id: str; t: float   # "first edition", "skip shelf 2"
 ```
 
-`Object`, `Price`, `Packet` follow the HLD section 6.6 and the brief's output contract; Packet is validated by a Pydantic model that **forbids** extra-missing fields from the contract and has validators: `frame_ref` must exist on disk; `amount` requires `source` and `retrieved_at`.
+`meta.json` holds `country` and `currency` exactly as the user gave them, or `null` until they do (never a default). `Object`, `Price`, `Packet` follow the HLD section 6.6 and the brief's output contract; Packet is validated by a Pydantic model that **forbids** extra-missing fields from the contract and has validators: `frame_ref` must exist on disk; `amount` requires `source` and `retrieved_at`.
 
 ## 3. Live path
 
@@ -93,16 +93,16 @@ class UserFact(BaseModel):
 
 ### 3.2 Server live path (`backend/live/app.py`, `voice_pipecat.py`, `agent.py`)
 
-State per sweep: `SweepSession{sweep_id, sd, coach, down (queue to browser), inject (queue to agent), frame_q, transcript, call_id, voice_task, hooks}`.
+State per sweep: `SweepSession{sweep_id, sd, coach, down (queue to browser), inject (queue to agent), frame_q, transcript, call_id, voice_task, hooks, tracker (shelf map), guide}`.
 
 Flow:
-1. `POST /api/sweeps` creates the dir and `meta.json`, and starts a frame worker for the sweep.
+1. `POST /api/sweeps` creates the dir and `meta.json`, and starts a frame worker for the sweep. Country and currency are stored only as the user typed them (`locale.clean`: ISO-shaped codes, anything else `null`); there is no default. When they are `null` the agent asks for them (`set_locale`, §3.3).
 2. `POST /api/sweeps/{id}/frames` saves the keyframe and queues it. The frame worker takes the **newest** queued frame (skipped ones are identified at finish), copies the last analysed frame's results if the view was already seen (`identify.carry_over`, §5.3), otherwise runs `identify_frame` with that frame as the reuse anchor. It then rebuilds the live inventory with the same dedupe as the pipeline and lets the Coach react.
 3. **Voice signalling:** the phone POSTs its SDP offer to `POST /api/sweeps/{id}/voice`. The selected engine (`VOICE_ENGINE`) answers it; the answer carries `X-Voice-Engine`. A new offer (reconnect) hangs up the previous call. The API key never leaves the laptop.
 4. Guide and app-state messages are queued on `session.inject` and delivered as a user message prefixed `[app-state]` **followed by a response request** (`voice_pipecat.say`: a `conversation.item.create` then `response.create`), only when nobody is speaking. Appending to the Pipecat context is NOT enough: the Realtime service only stores a context update and its messages-append handler is a stub, so messages sent that way were accepted and never spoken.
-5. `finish_sweep` (tool or button) → pipeline; then `PACKET_READY` with the templated voice summary; the transcript is saved to `transcript.json`.
+5. `finish_sweep` (tool or button) → pipeline; then `PACKET_READY` with the templated voice summary; the transcript is saved to `transcript.json`. If country or currency is still unknown, finish does not build anything: it shows a status line and the agent asks for them.
 
-`/ws/live` goes down to the screens, and the phone sends back one capture signal, `{"type":"blurry","n"}` (§6). Down: `inventory`, `coach` (`{type:"coach", kind: GUIDE|CAPTURE_ISSUE|STATUS, key, ask|text}`: the original type is kept in `kind`, because a message spread over `{type:"coach"}` used to overwrite it and no screen showed any tip), `status`, `transcript` (role, item id, text, append|set), `agent_state` (listening / hearing / thinking / speaking), `packet_ready`.
+`/ws/live` goes down to the screens. The phone sends back two kinds of signal (§6): `{"type":"setup","step":"hello","ar":bool}` when it connects (`ar` = WebXR AR available) and `{"type":"setup","step":"focused"}` once its picture has been steady and sharp for about a second; and `{"type":"blurry","n"}` during the sweep. Down: `setup` (`{step}`: focus / room / start / done), `locale` (`{country, currency}` after `set_locale`), `room` (the WebXR result), `inventory`, `coach` (`{type:"coach", kind: GUIDE|CAPTURE_ISSUE|STATUS, key, ask|text}`: the original type is kept in `kind`, because a message spread over `{type:"coach"}` used to overwrite it and no screen showed any tip), `status`, `transcript` (role, item id, text, append|set), `agent_state` (listening / hearing / thinking / speaking), `packet_ready`.
 
 **Engine `pipecat`** (default, `backend/live/voice_pipecat.py`)
 - Transport: Pipecat `SmallWebRTCTransport`; the phone's WebRTC terminates on the laptop (same Wi-Fi; ngrok carries only the page and signalling; `ICE_SERVERS` for STUN/TURN).
@@ -145,7 +145,7 @@ Flow:
 
 ### 3.3 Agent contract
 
-Prompts live in `backend/prompts/` (Python constants): `agent.py: SYSTEM` (rules + `$country`/`$currency`), `coach.py: ASKS, GUIDE_ASKS, BOOK_ASKS, BACK_ASK, BACK_WHERE, GIVE_UP, PROGRESS, IDLE` (what to say for each kind of guidance), `vision.py` (vision prompts).
+Prompts live in `backend/prompts/` (Python constants): `agent.py: SYSTEM` (rules + `$country`/`$currency`), `coach.py: ASKS, GUIDE_ASKS, BOOK_ASKS, BACK_ASK, BACK_WHERE, GIVE_UP, PROGRESS, IDLE, SETUP` (what to say for each kind of guidance), `vision.py` (vision prompts).
 
 Tools (all return small JSON; none write facts about items). Calls with a required argument missing are rejected with an error asking the model to clarify (seen with background chatter).
 
@@ -153,6 +153,7 @@ Tools (all return small JSON; none write facts about items). Calls with a requir
 |---|---|---|
 | `record_user_fact` | `target_hint`, `fact` (required) | Appends a `UserFact`; price/assemble apply it (e.g. "signed" forces appraisal, "print" allows pricing art). |
 | `mark_region` | `region`, `action: skip\|include` (both required) | Coach closes the region; a `skip` fact marks its books `unidentified` with reason `user_skipped`. |
+| `set_locale` | `country` (ISO 3166 two letters), `currency` (ISO 4217 three letters), both required | Writes them to `meta.json` (`Hooks.on_locale`), tells the screens (`locale`), and lets setup start. Codes that are not ISO-shaped ("Britain", "pounds") are rejected so the model asks again; "UK" is read as GB. |
 | `finish_sweep` | none | Triggers the pipeline. |
 
 Inbound app-state messages (injected by the server): `GUIDE{ask}` (said word for word), `CAPTURE_ISSUE{region, reason, ask}` (older per-region form), `STATUS{text}`, `PACKET_READY{summary_facts}`. (`QUESTION` for art "original or print?" is in the contract but nothing emits it yet.)
@@ -267,6 +268,7 @@ Code decides what to say and when; the agent only speaks the `ask` word for word
 
 | Method | Topic (`key`) | Rule |
 |---|---|---|
+| `setup_event(now, event)` / `setup_tick(now)` | `setup:focus` → `setup:room` → `setup:start` | Runs before everything else, once the phone says `hello` (a phone that never does skips setup). Waits while country/currency are unknown (`locale_known`), so it never talks over the agent's question. `focus`: first ask `setup_first_s` (3 s) after hello, i.e. queued behind the greeting; done on the phone's `focused`. `room` (only if the phone has AR): done when `/room/corners` is posted. `start`: says the measured floor area, or that the room size stays blank (no AR, or skipped), then "walk the room once"; the sweep's idle timer starts here. A step asked `setup_asks` (2) times, `setup_repeat_s` (25 s) apart, with no answer moves on. While setup runs, `on_blurry`, `on_frame` and the progress/idle part of `on_tick` say nothing. |
 | `on_blurry(now)` | `slow` | The phone sent `{"type":"blurry"}` (after `blurNudgeAfter` = 3 rejected sampling windows, at most every 4 s). Cooldown `guide_slow_gap_s` (15 s); 2nd message in 60 s is firmer. Why a phone signal and not "no frames": a user holding steady on an unchanged shelf also sends none. |
 | `on_frame(now, w, h, view, tracker)` | `book:hold` / `closer` / `glare` / `dark` / `blocked` / `partial` | After each frame. `view` = (sighting, book) of the latest frame (`BookTracker.view`). A book is *pending* when it is not identified, its reason is fixable (`HOW` maps blur, low_confidence, too_far, glare, too_dark, blocked, partial; `author_not_visible`, `no_catalogue_match`, `ambiguous_match` are not), not skipped, not a non-book. It must stay pending `guide_settle_s` (2 s). The most common cause among pending books chooses the sentence; `where()` turns their frame positions (3x3 grid) into "the book on the left", "the books at the top", "the book at the top right", "in view". Each book is asked at most `guide_book_asks` (2) times, `guide_book_gap_s` (12 s) apart. |
 | | `giveup` | A pending book already asked twice: one "I could not read ... I will note it and move on", then `skip` is set. |
@@ -275,13 +277,13 @@ Code decides what to say and when; the agent only speaks the `ask` word for word
 | | `idle` | `guide_idle_s` (15 s) with no new book, nothing in view needing attention (`busy_t`), and nothing just said (`last_t`); at most every `guide_idle_gap_s` (60 s); the 2nd message in 3 min is the shorter "say finish". Never before the first book. |
 | `skip(tracker, frame_id, region)` | | The agent's `mark_region(rowN, skip)`: books in that row of the current view stop being asked about. |
 
-**Wiring (`backend/live/app.py`).** `frame_worker` calls `on_frame` after each analysed or carried frame (the old per-row `Coach.update` is no longer called). A `guide_loop` task per session calls `on_tick` every `guide_tick_s` (2 s) while a phone is connected. The WebSocket reader turns `{"type":"blurry"}` from the phone into `on_blurry`. Every message goes through `guide_say`: a `coach` event for the screens (`screen_event`) and `GUIDE ask="..."` on `session.inject` for the agent. Wording lives in `backend/prompts/coach.py`.
+**Wiring (`backend/live/app.py`).** `frame_worker` calls `on_frame` after each analysed or carried frame (the old per-row `Coach.update` is no longer called). A `guide_loop` task per session calls `on_tick` every `guide_tick_s` (2 s) while a phone is connected. The WebSocket reader turns `{"type":"blurry"}` from the phone into `on_blurry` and `{"type":"setup"}` into `setup_event` + `setup_tick` (it also reads `meta.json` to set `locale_known`); `Hooks.on_locale` sets `locale_known`; `room_corners` calls `setup_event("room", area)`. The phone (`web/app.js`) decides "focused" itself: the centre-patch sharpness stays ≥ `focusMin` (25) for `focusSteady` (8) samples in a row, about 1 s; it also asks the camera for continuous autofocus where the browser allows it. `focusMin` is a calibration knob, not yet tuned on a real phone. Every message goes through `guide_say`: a `coach` event for the screens (`screen_event`) and `GUIDE ask="..."` on `session.inject` for the agent. Wording lives in `backend/prompts/coach.py`.
 
 **Legacy `Coach`.** The per-region class (asks about "shelf row 2", resolved/closed states) is kept only for `close(region)` on a skip and its own tests. Its asks were weak in practice: only fixable reasons triggered them (rare once capture got sharper), "row 2" is relative to each frame and means nothing to the user, and it only ran when a new frame arrived.
 
-Config: `guide_gap_s=6 guide_slow_gap_s=15 guide_repeat_window_s=60 guide_settle_s=2 guide_book_asks=2 guide_book_gap_s=12 guide_moved_on_s=4 guide_back_asks=2 guide_back_gap_s=20 guide_tick_s=2 guide_progress_every=10 guide_progress_gap_s=20 guide_idle_s=15 guide_idle_gap_s=60`.
+Config: `setup_first_s=3 setup_repeat_s=25 setup_asks=2 guide_gap_s=6 guide_slow_gap_s=15 guide_repeat_window_s=60 guide_settle_s=2 guide_book_asks=2 guide_book_gap_s=12 guide_moved_on_s=4 guide_back_asks=2 guide_back_gap_s=20 guide_tick_s=2 guide_progress_every=10 guide_progress_gap_s=20 guide_idle_s=15 guide_idle_gap_s=60`.
 
-Tests: `test_guide.py` (gating, escalation, wording by cause, positions, give-up, skip, direction left/right, not repeated, read-in-the-meantime, unfixable reasons, no starvation by an already-asked book, progress milestones, idle timing and its exceptions); `test_shelf_map.py` (`locate`); `test_live.py` (the phone's blurry signal, an unreadable book, the idle timer without frames); `test_voice_pipecat.py` (`say`: a user message item plus a response request, the fallback, waiting while the agent speaks, surviving a failed delivery). Each guidance type was also checked once against the real voice agent over WebRTC (the agent speaks the exact sentence within about half a second).
+Tests: `test_guide.py` (setup order focus → room → start, no-AR wording, unanswered steps move on, waits for the locale, book guidance silent during setup, gating, escalation, wording by cause, positions, give-up, skip, direction left/right, not repeated, read-in-the-meantime, unfixable reasons, no starvation by an already-asked book, progress milestones, idle timing and its exceptions); `test_shelf_map.py` (`locate`); `test_live.py` (setup over the WebSocket through to "Room measured: 12 square metres", no locale assumed and finish waits for it, the phone's blurry signal, an unreadable book, the idle timer without frames); `test_voice_pipecat.py` (`say`: a user message item plus a response request, the fallback, waiting while the agent speaks, surviving a failed delivery). Each guidance type was also checked once against the real voice agent over WebRTC (the agent speaks the exact sentence within about half a second).
 
 ## 7. Dedupe and the shelf map (`dedupe.py`, `shelf_map.py`, `book_tracker.py`, `track.py`)
 
@@ -317,6 +319,7 @@ Before reading, each book box is placed on the map; `plan()` then decides: **dro
 
 1. **Books:** `group_books` replays the frames in time order through a fresh `BookTracker` and unions each book's sightings. If a frame image is missing it falls back to frame-to-frame tracking for books.
 2. **Items** are tracked by both the shelf map (a separate registry, matched by IoU >= `map_item_match` 0.5 only, so a cabinet never swallows the books in it) and frame-to-frame links. Each item is described once (`plan_item`/`note_item`, with the same look check); the final grouping uses map + links (on two real sweeps 44 -> 34 and 32 -> 31 item objects, the lowest and most stable of the three variants) and never merges two items of different categories. The frame links: each keyframe is aligned to the next `track_span` (2) keyframes (links cached in `links.json`); boxes of frame A projected into B match one-to-one by IoU ≥ `track_iou` (0.3), and for items "one box inside the other" also counts (`item_contain_weight`) when the categories agree.
+   Items also merge **by name**: an item the camera left and came back to has no overlapping frames between the two visits, so tracking never links them (one desk was listed twice). Two item groups with the same **majority** name ("wooden desk") become one item unless one frame shows them as two clearly separate boxes. The majority, not the first name seen, because one mislabelled sighting ("wireless speaker" inside a floor speaker's group) would otherwise join two different speakers. Ceiling: two identical items never filmed together count once.
 3. **Never merge two different works.** The union-find refuses to join groups holding different accepted titles.
 4. **Same title in two groups = one book unless seen apart.** Two groups with the same identified work are merged, unless in some frame a sighting of each has a clearly separate box (overlap < `copy_overlap` 0.2): that is two copies side by side. Overlapping boxes of one title in one frame are the same book seen twice (whole and a piece, or at two zooms).
 5. **Identity.** A group takes its title from its best accepted read, so one good read names the book in every frame. Unidentified groups keep their most common reason.
@@ -426,7 +429,7 @@ Tests: no listing → `None` and excluded; FX conversion flags `converted`; sign
    - same for used
    - `items_replacement_cost_low/high = Σ low / Σ high for priced+range`
    - `excluded_from_totals = count of lines with no counted price or needs_appraisal`
-4. **Review queue** entries (one per line, one reason): `unidentified` (with reason code), `needs_appraisal`, `no_price`, `converted`, `id_confidence < review_T`, `scale_suspect`, `no_scale`, room fields missing, conflicts from dedupe.
+4. **Review queue** entries (one per line, one reason): `unidentified` (with reason code), `needs_appraisal`, `no_price`, `converted`, `wide_range` (an item's sourced range spans more than `diverge_ratio`), `id_confidence < review_T`, `scale_suspect`, `no_scale`, room fields missing, conflicts from dedupe.
 5. **Validation:** schema check; every `frame_ref` file exists; every amount has source + date; totals recomputed from lines equal stored totals (assert).
 6. Write `claim_packet.json`; `report.py` renders HTML with frame thumbnails and price URLs.
 7. Build voice summary from totals via template.
@@ -473,12 +476,18 @@ map:      map_candidates=4 map_cross=2 map_max_search=300 map_search_budget_s=2 
 read:     read_tries=3 reread_gain=1.5
 guide:    guide_gap_s=6 guide_settle_s=2 guide_book_asks=2 guide_book_gap_s=12 guide_moved_on_s=4 guide_back_asks=2 guide_back_gap_s=20
           guide_slow_gap_s=15 guide_progress_every=10 guide_idle_s=15 guide_idle_gap_s=60 guide_tick_s=2   (legacy coach: asks_per_region=2 ask_gap_s=8 settle_s=2)
+setup:    setup_first_s=3 setup_repeat_s=25 setup_asks=2   (phone: focusMin=25 focusSteady=8 in web/app.js)
+items:    item_keep=(furniture shelving lamp appliance art rug electronics decor) item_min_sightings=2 item_min_frac=0.005
+          person_conf=0.35 person_overlap=0.5
 price:    list_T=0.8 appraisal_threshold_usd=100 (converted via FX at runtime) antiquarian_year=1900 condition_assumed="good"
+          diverge_ratio=5 item_range_pct=(25,75) price_fallback_markets=(US,GB) http_timeout_s=8 (SerpApi 25)
+          book_merchant_blocklist=(audiobook audible etsy scribd kobo "google play" libro.fm) listing_blocklist=(lot of, set of, ebook, ...)
+locale:   none: country and currency always come from the user
 serving:  keyframe_max_bytes=3_000_000 public_origin=<set by run.sh>
 limits:   rate_frames=5/1s rate_voice=6/60s rate_finish=3/60s rate_new_sweep=10/60s
 marker:   marker_side_cm=<measured, MARKER_SIDE_CM> marker_dict=DICT_4X4_50
 ```
-Overridable in `.env`: model names, `VOICE`, `VOICE_ENGINE`, `NOISE_FILTER`, `VAD_MIN_VOLUME`, `NOISE_REDUCTION`, `VAD_THRESHOLD`, `ICE_SERVERS`.
+Keys in `.env`: `OPENAI_API_KEY`, `SERPAPI_API_KEY`, `GOOGLE_BOOKS_API_KEY`, `EBAY_CLIENT_ID`/`EBAY_CLIENT_SECRET`. Overridable in `.env`: model names, `VOICE`, `VOICE_ENGINE`, `NOISE_FILTER`, `VAD_MIN_VOLUME`, `NOISE_REDUCTION`, `VAD_THRESHOLD`, `ICE_SERVERS`.
 
 ## 14. Build order (maps to 48-hour plan)
 
@@ -498,8 +507,8 @@ Overridable in `.env`: model names, `VOICE`, `VOICE_ENGINE`, `NOISE_FILTER`, `VA
 - Segmentation boxes that merge two thin books or split one thick book.
 - A wrong read is still copied to later sightings of the same book (read once) when the look check passes (similar colours). The two causes seen on real sweeps (contradicting orientations, group boxes) and the drift cause are guarded (section 7.1b); a wrong read that is consistent across orientations is not detectable without a second source.
 - The shelf map assumes a flat shelf front. A frame that lines up with nothing starts a new map. On two real sweeps 14 of 54 and 10 of 46 frames did, and a looser second registration try rescued none of them (so it was removed): they are views that really share nothing with any earlier frame (the camera swung to the door or floor). Books seen on two separate maps are merged only when identified (same work); an unidentified book seen on two maps is counted twice. A model fallback ("do these two photos overlap?") was not built: for such frames the honest answer is no.
-- Items: what counts as an item is now narrow (found by looking at a real session where 31 of 55 "items" were junk: blurred fragments, bulbs, floor patterns, and parts of a person): people are masked out by their outline (`person_conf`, `person_overlap`; the brief says not to capture people), only the categories in `item_keep` (the brief's list, never "other"), fragments under `item_min_frac` of the frame are not described, an item needs `item_min_sightings` (2), and the detector vocabulary lists only what the brief names. Result on that session: 55 -> 11-16 items. Saved frames and thumbnails can still show a person; avoid people in the demo capture.
-- Prices: only books Google Books sells as ebooks get a price (2 of 6 identified on one real session); used value and every item price need eBay keys. A median of several cheap ebook editions can be well below the print price: it is labelled as an ebook price, with the listing count.
+- Items: what counts as an item is now narrow (found by looking at a real session where 31 of 55 "items" were junk: blurred fragments, bulbs, floor patterns, and parts of a person): people are masked out by their outline (`person_conf`, `person_overlap`; the brief says not to capture people), only the categories in `item_keep` (the brief's list, never "other"), fragments under `item_min_frac` of the frame are not described, an item needs `item_min_sightings` (2), and the detector vocabulary lists only what the brief names. Result on that session: 55 -> 11-16 items. Saved frames and thumbnails can still show a person (one real session has a face in a saved frame); avoid people in the demo capture.
+- Prices: with `SERPAPI_API_KEY` (Google Shopping) 5 of 6 identified books on one real session got a new price and 2 a used value, and every item got a price or range. Shopping results mix in other formats under the plain title: audiobook and digital-download merchants are now skipped (`book_merchant_blocklist`), but a merchant not on the list can still slip through. Unbranded item ranges can be very wide (a "floor speaker" at 629-22,684 USD): kept because they are sourced, sent to review as `wide_range`. Free SerpApi plan: 250 searches a month; responses are cached, so a re-run costs nothing. Without SerpApi or eBay keys, only Google Books ebook prices remain.
 - Item counts vary between runs (29-44 on one sweep over the session as the grouping changed; 34 now) and have no hand count: items are boxed loosely and the open-vocabulary detector finds different things per frame.
 - Book counts have been compared with the shelf only by eye; `python -m backend.eval sweeps/<id> --count N` checks a sweep against a hand count (5% bar).
 - Marker not coplanar with spine fronts (deep shelves): systematic dims bias.
@@ -507,7 +516,7 @@ Overridable in `.env`: model names, `VOICE`, `VOICE_ENGINE`, `NOISE_FILTER`, `VA
 - Catalogue misses for regional or older titles (leads to honest `unidentified`).
 - Used-price comparability (different editions in one listing pool).
 
-## 16. Implementation status (as built, 2026-10-17)
+## 16. Implementation status (as built, 2026-10-18)
 
 Changes from the original design, and why:
 
@@ -522,6 +531,9 @@ Changes from the original design, and why:
 | Prompts | Inline in code | `backend/prompts/` constants | One place to edit what models are told |
 | Per-frame cost | Detect every keyframe | Carry over already-seen views; newest frame first; not-a-book check in the read call | Fewer model calls, live panel stays current, fewer false books |
 | Models | Unspecified | Mini models by default | Cost |
+| Prices | eBay + a shopping API | Chain: eBay (if keys) → Google Shopping via SerpApi → Google Books ebook prices; local market first, then `price_fallback_markets` (converted) | eBay rejected the developer account; SerpApi gives real merchant prices, new and used, for books and items |
+| Items | Priced by category + material | Priced by the short shop name the vision model gives ("office chair"); a brand alone is not a model; wide ranges go to review; same-name items merge | "furniture" matched any furniture; "M-Audio" priced any M-Audio product at $35; one desk was listed twice |
+| Sweep start | Greet, confirm country, explain the sweep | Agent asks for country and currency (never assumed), then code-led setup: camera focus, room size (AR), then the sweep | Room size was never measured in practice: the button was easy to miss once the sweep had started; and US/USD defaults priced sweeps in the wrong market |
 | Live guidance | Coach: per-row asks from failure reason codes | Guide: slow down (phone signal), hold steady on a named book, go back to a passed book (direction from the shelf map), progress, area done; delivered as a user message plus a response request | The coach's messages were never spoken (Pipecat stores a context update silently) nor shown (event type overwritten); its "row 2" asks meant nothing to the user |
 
 Built and covered by tests: quality gating, identify (segment/orient/read/match, parallel reads, read-once reuse), catalogue matching, tracking + dedupe, carry-over of already-seen views, not-a-book check, strict identity, Coach, marker scale, book dimensions, room math (synthetic points), pricing (FX, appraisal rules), assemble/validation, self-contained report, pipeline, eval, ingest, API auth and rate limits, both voice engines. Both voice engines verified end to end with a scripted WebRTC client against real OpenAI (quiet room and background-TV scenarios).
@@ -530,7 +542,7 @@ Not built yet:
 - Room reconstruction and **markerless** scale: `NullReconstructor` only, so room fields stay blank and go to review. Research favoured fusing several scale sources (metric-depth model such as MapAnything, phone motion sensors, scene priors) and measuring the error on real rooms; not started.
 - Room fallbacks (floor-marker homography, user-stated height); marker-plane rectification and per-shelf scale.
 - A coverage map for "you missed a shelf" (the Guide only goes back to books it saw but could not read, and says when an area looks done); `QUESTION` messages (art "original or print?"); linking spoken references ("the book on the left") to an object.
-- A second price source (eBay serves both new and used; without eBay keys every price is blank); item dimensions (text hint only).
+- Item dimensions (text hint only). Blurring people out of saved frames.
 
 Known issues:
 - Non-books: the read-time `is_book` check rejects them (verified on a small real sample); the detector still draws loose boxes that can mix an object and a book.

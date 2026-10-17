@@ -26,6 +26,7 @@ def _total(values: Iterable[float | None]) -> float:
 
 
 def compute_totals(books: list[BookLine], items: list[ItemLine], shelf_run_m: float | None, currency: str) -> Totals:
+    """Totals computed in code from the lines (never by a model). Lines without a counted price are excluded and counted."""
     def counted_book(b: BookLine) -> bool:
         return b.status != "needs_appraisal" and any(p is not None and p.amount is not None for p in (b.replacement, b.used))
 
@@ -56,6 +57,8 @@ def _review_reason(reasons: set[str]) -> str | None:
 
 
 def build(sd: Path, cfg: Config = CFG) -> Packet:
+    """Combine objects, measurements, prices and user facts into the contract packet, with one review-queue
+    reason per doubtful line (REVIEW_PRIORITY), room/stage problems, and validation against the saved frames."""
     meta = store.read(sd, "meta.json")
     objs = store.read(sd, "objects.json", list[Object], default=[])
     geo = store.read(sd, "geometry.json", Geometry, default=Geometry())

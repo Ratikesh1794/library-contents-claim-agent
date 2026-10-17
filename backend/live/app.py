@@ -54,6 +54,7 @@ Scan the QR code shown in the server's terminal again.</p></div>"""
 
 @dataclass
 class SweepSession:
+    """Everything the server keeps in memory for one live sweep (the disk copy is the sweep directory)."""
     sweep_id: str
     sd: Path
     cfg: Config
@@ -114,6 +115,7 @@ class Hooks:
             self.on_fact(region, "skip", None)
 
     def on_locale(self, country: str, currency: str) -> None:
+        """The agent's set_locale tool: store the user's country and currency and let setup start."""
         meta = store.read(self.s.sd, "meta.json")
         store.write(self.s.sd, "meta.json", {**meta, "country": country, "currency": currency})
         self.s.down.put_nowait({"type": "locale", "country": country, "currency": currency})
@@ -168,6 +170,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
 
     # ------------------------------------------------------------------ session / workers
     def session_for(sweep_id: str) -> SweepSession:
+        """The live session of a sweep, created on first use with its frame worker, fan-out and guide timer."""
         s = app.state.sessions.get(sweep_id)
         if s is None:
             s = SweepSession(sweep_id, get_dir(sweep_id), cfg, Coach(cfg))
@@ -259,6 +262,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
         return dedupe.build_objects(sightings, frames, track.links(sd, frames, cfg), cfg, groups), len(all_frames), len(frames)
 
     async def push_inventory(s: SweepSession):
+        """Send the current inventory (same dedupe as the pipeline) to every screen."""
         objs, n_frames, n_done = await asyncio.to_thread(current_objects, s)   # CPU work: off the event loop
         books = [o for o in objs if o.kind == "book"]
         common = lambda o: {"id": o.id, "status": o.status, "reason": o.reason, "frame": Path(o.frame_ref).name,
@@ -272,6 +276,8 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
                                      "frames": n_frames, "analysed": n_done}})
 
     async def finish(s: SweepSession):
+        """Build the packet once (pipeline), then tell the screens and have the agent read the summary.
+        Without a country and currency nothing is built: the agent asks for them instead."""
         if s.finished:
             return
         meta = store.read(s.sd, "meta.json")
@@ -363,6 +369,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
 
     @app.post("/api/sweeps", dependencies=[Depends(require_token)])
     async def create_sweep(request: Request):
+        """New sweep. Country and currency are kept only if the user typed valid codes; otherwise null (the agent asks)."""
         limits.check(("new_sweep",), cfg.rate_new_sweep)
         body = await request.json() if await request.body() else {}
         country, currency = locale.clean(body.get("country"), body.get("currency"))   # blank: the agent asks the user
@@ -373,6 +380,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
     @app.post("/api/sweeps/{sweep_id}/frames", dependencies=[Depends(require_token)])
     async def upload_frame(sweep_id: str, request: Request, seq: int, t: float, w: int = 0, h: int = 0,
                            blur: float = 0, glare: float = 0, dark: float = 0):
+        """Save one keyframe (JPEG body) idempotently by `seq` and queue it for the live worker."""
         limits.check((sweep_id, "frames"), cfg.rate_frames)
         if int(request.headers.get("content-length") or 0) > cfg.keyframe_max_bytes:
             raise HTTPException(413, "keyframe too large")
@@ -477,6 +485,8 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
 
     @app.websocket("/ws/live")
     async def ws_live(ws: WebSocket):
+        """Live channel. Down: every live message to every screen (dashboards get a replay of history first).
+        Up (phone only): setup signals (hello with AR support, focused) and the 'blurry' capture signal."""
         if not origin_ok(ws.headers.get("origin"), ws.headers.get("host")) or not check_token(ws.query_params.get("t")):
             await ws.close(code=4401)
             return

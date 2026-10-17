@@ -30,6 +30,11 @@ scripts/run.sh             # starts the server + tunnel and opens the laptop das
 
 Scan the QR code, allow camera and microphone, keep the screen on, tap **Start sweep**, and talk.
 
+**How a sweep starts.** Country and currency are never assumed: type them on the start screen or leave them blank
+and the agent asks ("which country are you in, and which currency should the claim use?"). Then the agent leads a
+short setup: hold the camera on a shelf until the picture is sharp; on Android Chrome, tap *Measure the room* and mark
+the floor corners; then walk the room once, shelf by shelf. Each step is asked at most twice, then it moves on.
+
 **Two screens:**
 - **Phone:** camera, the voice agent (state, mute / hold-to-talk, last thing each side said), book/item counts,
   *Measure the room*, *Finish*.
@@ -48,7 +53,7 @@ Troubleshooting:
 
 ### Measuring the room (browser, Android Chrome)
 
-During a sweep, Chrome on an ARCore-capable Android phone shows **📐 Measure the room**. It opens an AR view in the
+Chrome on an ARCore-capable Android phone shows **📐 Measure the room**; the agent asks for it at the start (setup). It opens an AR view in the
 browser (WebXR; nothing to install): aim the circle at each floor corner **in order around the room** and tap
 *Add point*, then *Next*, then aim at a point where a wall meets the ceiling (for the height) or *Skip*. The phone's
 motion tracking gives the points in metres → floor area, length, width, height and wall area (m² and ft²).
@@ -166,18 +171,20 @@ against real OpenAI.
 - Non-books are rejected by a check in the spine-read call (verified on a small real sample); detector boxes can still be loose.
 - Background voices: the Pipecat engine's volume gate ignored a TV ~20 dB quieter than the user in testing; a loud TV near the phone can still pass (raise `VAD_MIN_VOLUME`, or use hold-to-talk). Soft first words can be clipped by the gate.
 - The Pipecat engine needs the phone on the same Wi-Fi as the laptop (or a TURN server in `ICE_SERVERS`); `VOICE_ENGINE=direct` works anywhere.
-- Without eBay keys: book prices exist only for books Google Books sells as ebooks (new, labelled ebook); used values and item prices are blank. `python scripts/price_second_country.py sweeps/<id> GB` shows the same books priced for a second country.
+- Prices: with `SERPAPI_API_KEY` books get merchant prices (new and used) and items get a price or a sourced range from Google Shopping; without it (and without eBay keys) only books Google Books sells as ebooks get a price. Unbranded item ranges can be wide; those go to the review queue (`wide_range`). `python scripts/price_second_country.py sweeps/<id> GB` shows the same books priced for a second country.
+- Saved frames can still show a person (detections on people are removed, the photos are not blurred).
 - Item counts after tracking have not yet been checked on a sweep captured with the new camera path.
 
 **Not built yet:** room size on iPhone (WebXR room measuring is Android Chrome only), markerless spine scale, room
 fallbacks, marker-plane rectification and per-shelf scale, the Coach's "missed shelf" map, art "original or print?"
-questions, linking spoken references ("the book on the left") to an object, a second price source, item dimensions.
+questions, linking spoken references ("the book on the left") to an object, item dimensions, blurring people in saved frames.
 Details in [`docs/low-level-design.md` §16](docs/low-level-design.md).
 
 ## Assumptions (state these when presenting results)
 
 1. A printed ArUco marker (`DICT_4X4_50`, side measured with a ruler → `MARKER_SIDE_CM`) on the shelf counts as a reference object.
-2. Replacement cost = lowest credible new listing; used value = median of ≥3 used listings, condition assumed "good".
+2. Replacement cost = lowest credible new listing (median for ebook stores); used value = median of ≥3 used listings, condition assumed "good". An item without a model is priced as the middle half (25th-75th percentile) of matching listings.
+2a. Country and currency are whatever the user says; with no local listing, prices come from `price_fallback_markets` (US, GB) and are marked converted.
 3. Appraisal threshold is `appraisal_threshold_usd` in `config.py`, converted to the sweep currency with the day's ECB rate.
 4. Wall area is gross (openings not subtracted); non-rectangular rooms are over-estimated by the convex hull and say so in `notes`.
 5. With a tunnel, keyframes transit the tunnel provider; voice audio goes directly between the phone and OpenAI.

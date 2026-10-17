@@ -160,6 +160,10 @@ def group_books(sd: Path, frames: list[Frame], sightings: list[Sighting], cfg: C
 def build_objects(sightings: list[Sighting], frames: list[Frame],
                   links: dict[tuple[str, str], np.ndarray | None] | None = None, cfg: Config = CFG,
                   book_groups: list[list[str]] | None = None) -> list[Object]:
+    """Sightings -> one Object per physical book or item. Books: the shelf map's groups (or frame tracking
+    without one); items: frame tracking plus same-name merging. The same identified work in two groups is one
+    book unless seen apart; two different works or item categories never merge. Items kept: claim categories
+    seen in `item_min_sightings` frames. Ids are numbered by first appearance."""
     fr = {f.id: f for f in frames}
     sightings = [s for s in sightings if s.frame_id in fr]
     by_id = {s.id: s for s in sightings}
@@ -244,6 +248,7 @@ def build_objects(sightings: list[Sighting], frames: list[Frame],
 
 
 def run(sd: Path, cfg: Config = CFG) -> None:
+    """Group the sweep's sightings into objects.json (shelf map first, frame-to-frame tracking if a frame is missing)."""
     sd = Path(sd)
     frames = store.read(sd, "frames.json", list[Frame], default=[])
     sightings = store.read(sd, "sightings.json", list[Sighting], default=[])

@@ -26,6 +26,7 @@ SOLD = ("FOR_SALE", "FOR_SALE_AND_RENTAL")
 
 
 class GoogleBooksPrices:
+    """Google Books store prices (saleInfo.retailPrice): new ebook prices only, per country, books only."""
     wants_hints = True                                    # the price stage passes {title, author}
 
     def local_market(self, country: str | None) -> str | None:

@@ -64,6 +64,7 @@ def where(cells: list[tuple[str, str]]) -> str:
 
 
 class Guide:
+    """Per-sweep guidance state: setup step, per-topic timing, book count milestones. See the module docstring."""
     def __init__(self, cfg: Config = CFG):
         self.cfg = cfg
         self.last_t = NEVER                                # when anything was last spoken (also by the Coach)

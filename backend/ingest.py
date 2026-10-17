@@ -21,6 +21,8 @@ from backend.schemas import Frame
 
 def ingest(src: Path, country: str, currency: str, fps_keep: float = 2.0, blur_floor: float = 30.0,
            root: Path | None = None) -> Path:
+    """A video file or photo folder -> a new sweep directory of sharp, distinct keyframes (no live phone needed).
+    Country and currency must be given: they are the user's, never assumed."""
     sd = store.new_sweep(country, currency, root, source=str(src))
     frames: list[Frame] = []
     last_small = None

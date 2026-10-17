@@ -7,6 +7,7 @@ from backend.ports import Listing, PriceSource
 
 
 class ChainPriceSource:
+    """Sources in priority order (deps.price_source): the price stage tries each local market, then the foreign ones."""
     wants_hints = True                                    # forwarded only to the sources that ask for them
 
     def __init__(self, sources: list[PriceSource]):

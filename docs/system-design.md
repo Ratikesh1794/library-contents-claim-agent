@@ -127,7 +127,7 @@ IDs are referenced by tests and the results sheet.
 | D3 | **Metric scale from a printed ArUco marker** on/near the shelf, cross-checked against standard book formats. | Brief accepts a reference object. Deterministic, explainable line by line. |
 | D4 | **Room geometry from multi-view reconstruction, scaled by the marker.** Fallback: WebXR AR hit-testing or LiDAR capture. | No LiDAR assumption on user's phone. Go/no-go decided in the first spike. |
 | D5 | **Strict, catalogue-grounded identification.** The vision model reads spine text; a book is identified only when the title **and** the author read from the spine both match the same Open Library / Google Books record, and no other matching record is a different book. Edition/year only if the spine's publisher also matches; ISBN only for a verified single-edition record. Everything else stays `None`. | A title the spine and a catalogue don't both confirm cannot be asserted. A plausible guess is the worst outcome (NFR-I3). |
-| D6 | **Prices only from retrieved listings** (shopping search, eBay API), FX from a rates API. LLM may pick *which listing matches a book*, never a number. | Meets NFR-I1. |
+| D6 | **Prices only from retrieved listings** (Google Shopping via SerpApi, eBay API when keys exist, Google Books ebook prices), FX from a rates API. LLM may pick *which listing matches a book*, never a number. | Meets NFR-I1. |
 | D7 | **Plain Python orchestration**, not an agent framework, for the post-sweep pipeline. | Easier to test, time, and explain. |
 | D8 | **Sweep stored as a directory of JSON + frames.** | Enables re-runs, eval, and traceability with no database. |
 | D9 | **Identify is segment → orient → read → match**, not "send frame to a model". | Rotated spines and flat books need an upright crop; OCR alone does not fix orientation. |
@@ -144,6 +144,10 @@ IDs are referenced by tests and the results sheet.
 | D19 | **Analyse only what is new.** A keyframe that mostly shows the last analysed frame copies its results; the live worker always works on the newest frame; the spine-read call also says whether a crop is a book at all. | Cost and latency scale with model calls, not frames; a stale queue made coach tips lag; non-books (perfume boxes) were being counted as books. |
 | D22 | **Count books by position, read each once.** Every frame is registered on a shared map of the shelf; a book that lands on an already-registered spot is the same book (forward, backward, return visits, unreadable titles, identical copies side by side all work). Each book is read once and a non-book is remembered. Items are placed on the map too and described once; the final item grouping uses the map plus frame-to-frame links. | Title matching fails when titles are unreadable or repeated; a model remembering recent frames forgets books and double-counts when the user goes back. Position is independent of both. On two blurred real sweeps: 198 -> 15 books (11 identified) and 0 -> 25 (15 identified). |
 | D23 | **Guidance is decided by code and must be answered by the model.** The Guide covers slowing down (the phone says it cannot get sharp frames), holding steady on a named book ("the book on the left"), going back to a book that was passed unread (direction from the shelf map, in what the user sees), progress every 10 books, and "this area looks done, move on or say finish". App messages are sent to the Realtime model as a user message followed by a response request. | In Pipecat's Realtime service a context update is only stored and its messages-append handler is a stub, so every coach message was accepted and silently dropped: the agent greeted and then never guided. Position words and directions come from the map, not from the model. |
+| D24 | **Merchant prices from Google Shopping (SerpApi)**, chained after eBay and before Google Books ebook prices; the local market first, then a configured foreign market (converted, labelled). Audiobook and digital-download merchants are skipped for books. A used-price spread flags appraisal only on its 20th-80th percentile when there are ≥5 listings. | The eBay developer account was rejected, leaving used values and every item blank. Google Shopping covers new and used, books and items, with a link per listing. Seen on real data: Audiobooks.com ($2.50) and an Etsy PDF ($2.99) accepted as printed books; one collector's copy sent a common paperback to appraisal. |
+| D25 | **Items are priced by what they are, and counted once.** The vision model gives a short shop name ("office chair"), used as the price query and the packet's description. Only a brand_model containing a number counts as a model (single price); a brand alone gives a range (middle half of listings), and a range wider than 5x goes to review. Two item groups with the same majority name merge unless one frame shows both. | Searching by category matched any furniture; "M-Audio" priced any M-Audio product; one desk the camera left and came back to was listed twice. |
+| D26 | **Setup before the sweep, led by code:** camera focus (the phone reports a steady sharp picture), then room size (WebXR corners where the phone has AR), then "walk the room once". Book guidance is silent until setup is done; an unanswered step moves on after two asks. | Room size was never captured in practice: the Measure button was easy to miss once the walk had started. A sharp camera before the first shelf saves the blurred first frames. |
+| D27 | **Country and currency always come from the user**: typed on the start screen or asked by the agent and recorded with a `set_locale` tool. No default anywhere; the packet is not built without them. | A prefilled US/USD silently priced a sweep in the wrong market and currency, which is a fabricated local price. |
 | D14 | **Phone is the capture device; the laptop runs the server.** The phone opens the web app in its browser over HTTPS (tunnel or local HTTPS). Laptop webcam is not the primary camera. | Walking a room needs a handheld rear camera; browsers allow camera/mic only on HTTPS, so access topology is part of the design. |
 
 ### 5.1 Build vs take
@@ -156,7 +160,7 @@ IDs are referenced by tests and the results sheet.
 | Title to real book | Open Library, Google Books APIs | Strict title + author verification, ambiguity check, field-level edition/ISBN rules |
 | Metric scale | OpenCV ArUco | px to cm per shelf plane, cross-checks |
 | Room dimensions | RGB reconstruction model (e.g. VGGT, COLMAP); optional monocular metric depth as a cross-check | Plane fitting, scaling with marker, area math, fallbacks |
-| Prices | eBay Browse API, shopping search API, Frankfurter FX | Listing-to-book matching, source/URL/date logging, `converted` flag, appraisal rules |
+| Prices | SerpApi (Google Shopping), eBay Browse API (optional), Google Books sale info, Frankfurter FX | Listing-to-book matching, source/URL/date logging, `converted` flag, appraisal rules |
 | Same object across frames | OpenCV ORB + RANSAC homography | Tracking, carry-over of already-seen views, dedupe rules |
 | Dedupe, totals, review queue, report, eval | Nothing | All ours; this is the graded core |
 
@@ -190,8 +194,8 @@ Rule: below the readable-pixel threshold the system does not infer. It marks `un
 │  /voice: WebRTC signalling (API key stays here)                                                    │
 │  Voice engine "pipecat":  RNNoise ─► Silero VAD + volume gate ─► OpenAI Realtime (turns decided here)│
 │     (engine "direct": phone ↔ OpenAI Realtime, server attached sideband)                           │
-│  Tools record_user_fact, mark_region, finish_sweep; captions + agent state ─► /ws/live            │
-│  Guide: shelf map + capture signals -> GUIDE sentences for the agent                               │
+│  Tools record_user_fact, mark_region, set_locale, finish_sweep; captions + agent state ─► /ws/live│
+│  Guide: setup (focus, room) then shelf map + capture signals -> GUIDE sentences for the agent      │
 │  Sweep Store (disk):  sweeps/<id>/ frames/ frames.json sightings/ links.json user_facts.json …     │
 │                                                                                                    │
 │  Live worker: newest frame ─► already seen? carry results over : IDENTIFY                          │
@@ -203,7 +207,7 @@ Rule: below the readable-pixel threshold the system does not infer. It marks `un
 │   └────┬─────┘  └─────────────┘  └────┬────┘  └───┬────┘  └──────────┘                             │
 └────────┼──────────────────────────────┼───────────┼────────────────────────────────────────────────┘
          ▼                              ▼           ▼
-   OpenAI vision (gpt-4.1-mini)   ArUco (OpenCV)   eBay Browse, FX rates
+   OpenAI vision (gpt-4.1-mini)   ArUco (OpenCV)   SerpApi Google Shopping, eBay, Google Books, FX
    Open Library / Google Books    3D reconstruction (not built yet)
 ```
 
@@ -213,9 +217,9 @@ Rule: below the readable-pixel threshold the system does not infer. It marks `un
 |---|---|---|
 | Browser quality checker | Blur, glare, brightness scores per frame; "which shelf" hint from motion | Identify content |
 | Live server + voice engine | WebRTC signalling; filter and gate the user's audio (pipecat) or attach sideband (direct); run tools; push captions / agent state / inventory to the UI | Write inventory facts itself; send the API key to the phone |
-| Live voice agent | Converse, coach, ask questions, relay user corrections via tools | State prices, titles, or dimensions as fact |
+| Live voice agent | Converse, ask for country and currency, speak setup and coaching sentences, relay user corrections via tools | State prices, titles, or dimensions as fact; assume a country or currency |
 | Identify | Per keyframe: segment each book, classify orientation, rotate/upscale crop, read text, catalogue match + score; non-book classification; emit reason code on failure | Guess below threshold |
-| Guide | Per-book state (asked, when, how often) kept on the shelf map; turns capture signals, unreadable books and the map into one rate-limited `GUIDE` sentence; gives up on a book after 2 asks | Read, name, or judge content |
+| Guide | Setup steps (focus, room size, start); per-book state (asked, when, how often) kept on the shelf map; turns capture signals, unreadable books and the map into one rate-limited `GUIDE` sentence; gives up on a book after 2 asks | Read, name, or judge content |
 | Dedupe | Merge sightings of the same object (shelf + position + frame overlap, 3D location when available) | Drop unidentified books |
 | Measure | Marker → cm/px per shelf plane; spine dims; shelf run; room dims and areas | Estimate scale by model "feel" |
 | Price | Query sources, match listing to item, record URL/date/condition, FX with `converted` flag | Output a number without a source |
@@ -225,7 +229,7 @@ Rule: below the readable-pixel threshold the system does not infer. It marks `un
 ### 6.3 Sweep lifecycle
 
 ```
-IDLE → GREETING (country/currency) → CAPTURING ⇄ RECAPTURE → FINALIZING → READY
+IDLE → GREETING (ask/confirm country + currency) → SETUP (focus → room size) → CAPTURING ⇄ RECAPTURE → FINALIZING → READY
                                          │
                       live loop: frame → quality check → warn? → agent speaks
                       background: keyframe → identify → panel update
@@ -236,14 +240,16 @@ Measure and Price run in parallel after Dedupe, since price needs only identity 
 
 ### 6.4 Interfaces
 
-**WebSocket `/ws/live`** (backend → browser only)
-- `inventory` (live lines), `coach` (capture tip), `transcript` (role, item id, text, append|set), `agent_state`, `status`, `packet_ready`
+**WebSocket `/ws/live`**
+- Down (backend → screens): `inventory` (live lines), `coach` (setup step or capture tip), `setup` (current step), `locale`, `room`, `transcript` (role, item id, text, append|set), `agent_state`, `status`, `packet_ready`
+- Up (phone → backend): `setup` (`hello` with AR support, `focused`), `blurry`
 
 **HTTP**
 - `POST /api/sweeps` → create, returns `sweep_id`
 - `POST /api/sweeps/{id}/frames` → hi-res keyframe (JPEG body) + `seq`, timestamp, quality scores
 - `POST /api/sweeps/{id}/voice` → WebRTC SDP offer in, SDP answer out (starts the voice call)
-- `POST /api/sweeps/{id}/finish` → run pipeline
+- `POST /api/sweeps/{id}/room/corners` → WebXR floor corners + ceiling point (metres); ends the setup room step
+- `POST /api/sweeps/{id}/finish` → run pipeline (asks for country/currency first if missing)
 - `GET /api/sweeps/{id}/packet` → JSON; `/report` → HTML (self-contained, thumbnails embedded)
 - `GET /api/sweeps/{id}/frames/{ref}` → saved frame
 
@@ -253,6 +259,7 @@ Measure and Price run in parallel after Dedupe, since price needs only identity 
 | (inbound) `GUIDE{ask}` | Sent by the Guide, not called by the agent. Agent speaks the ask word for word, one sentence. (`CAPTURE_ISSUE` is the older per-region form.) |
 | `record_user_fact(target_hint, fact)` | e.g. "first edition", "print", "signed"; stored with the transcript |
 | `mark_region(region, action)` | skip/include a shelf on user instruction |
+| `set_locale(country, currency)` | the user's answer, as ISO codes; written to the sweep, never guessed |
 | `finish_sweep()` | user says done; starts finalize |
 
 ### 6.5 Stage contracts (JSON on disk)
@@ -391,6 +398,9 @@ Fallbacks, in order: marker-scaled plane fit from single-view homography on floo
 | Two catalogue records match but are different books | `unidentified` (`ambiguous_match`) |
 | Non-book detected as a book (perfume box, DVD…) | Spine-read check says `is_book=false`; the box is dropped, never counted or priced |
 | Price source down / no listing | blank price, counted in `excluded_from_totals` |
+| Item price range very wide (unbranded) | Range kept (it is sourced), line sent to review as `wide_range` |
+| User never gives country/currency | Setup waits; finish asks instead of building a packet |
+| Camera never reports focus / room step unanswered | Asked twice, then setup moves on; room fields blank, `room_scale_missing` |
 | Live model session drops | Phone re-establishes the WebRTC call; frames already saved so pipeline unaffected |
 | Pipeline exceeds 3 min budget | Stages emit partial results; packet built with what exists; unfinished lines go to review queue |
 | Low-res camera / spine too small | `unidentified` + `too_far`/`blur`; dims kept; honest count in results |
@@ -435,9 +445,9 @@ Every number answers "where did this come from?":
 ## 11. Assumptions to state in README
 
 1. A printed marker placed on the shelf counts as a reference object, not a separate measuring pass.
-2. Replacement cost = lowest credible new price from a local retailer; used value = median of comparable used listings.
+2. Replacement cost = lowest credible new price from a local retailer (median for ebook stores, which list knock-off editions); used value = median of comparable used listings. Item without a model = the middle half of matching listings.
 3. Appraisal threshold is set once in config and stated in the report.
-4. "Local" means retailers/marketplaces serving the chosen country; otherwise converted and labelled.
+4. "Local" means retailers/marketplaces serving the country the user gave; otherwise converted from `price_fallback_markets` and labelled.
 5. Latency budget: sweep ≤3 min, finalize ≤3 min, leaving 2 min slack against the 5 min bar.
 
 ## 12. Open questions (answer before build)

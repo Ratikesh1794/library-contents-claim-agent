@@ -59,6 +59,7 @@ def is_used(item: dict) -> bool:
 
 
 class SerpApiPrices:
+    """Google Shopping results through serpapi.com (SERPAPI_API_KEY). Markets are country codes (gl=<country>)."""
     wants_hints = False
 
     @staticmethod
@@ -72,6 +73,9 @@ class SerpApiPrices:
         return list(CFG.price_fallback_markets)
 
     def search(self, query: str, market: str, condition: str, books: bool = True) -> list[Listing]:
+        """Listings for `query` in `market` with the given condition ('new' | 'used', from SerpApi's
+        second_hand_condition). Books add ' book' to the query, skip audiobook/digital merchants and ask the price
+        stage to find the author in the title (shopping titles have no author field). Responses are cached."""
         key = os.environ.get("SERPAPI_API_KEY")
         if not key:
             return []

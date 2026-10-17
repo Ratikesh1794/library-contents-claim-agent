@@ -83,6 +83,7 @@ def quad_of(poly: np.ndarray) -> tuple[list[tuple[float, float]], str]:
 
 
 class LocalDetector:
+    """The two segmentation models, loaded once per process and shared by the live worker and the pipeline."""
     def __init__(self, cfg: Config = CFG):
         self.cfg, self._lock, self._models = cfg, threading.Lock(), None
 
@@ -121,6 +122,7 @@ class LocalDetector:
         return out
 
     def detect(self, img: np.ndarray) -> list[Detection]:
+        """Books, items and people in one image -> detections with nothing on a person, one per object."""
         with self._lock:                           # one predict at a time (live worker + pipeline share the models)
             if self._models is None:
                 self._load()
@@ -139,6 +141,7 @@ class LocalDetectVision:
         self.detector, self.reader = detector, reader
 
     def detect(self, img: np.ndarray) -> list[Detection]:
+        """Books, items and people in one image -> detections with nothing on a person, one per object."""
         return self.detector.detect(img)
 
     def read_spine(self, crop: np.ndarray) -> SpineRead:

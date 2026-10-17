@@ -100,6 +100,10 @@ def _mk(kind, rows, currency, cond, amount=None, low=None, high=None, rep=None) 
 
 def price_book(o: Object, user_facts: list[UserFact], currency: str, country: str | None,
                src: PriceSource, fx: FX, cfg: Config = CFG) -> PriceResult:
+    """Replacement (new) and used value for one book, from retrieved listings only.
+    Signed or antiquarian books, used prices that disagree too much, or any price above the appraisal threshold
+    -> needs_appraisal with no number. New = lowest accepted listing (median for ebook stores); used = median of
+    `used_min_listings`+ listings, else a low-high range. Foreign listings are converted and marked."""
     f = facts.flags(o, user_facts)
     if "signed" in f:
         return PriceResult(object_id=o.id, status="needs_appraisal", reason="signed_or_inscribed")
@@ -146,6 +150,10 @@ def price_book(o: Object, user_facts: list[UserFact], currency: str, country: st
 
 def price_item(o: Object, user_facts: list[UserFact], currency: str, country: str | None,
                src: PriceSource, fx: FX, cfg: Config = CFG) -> PriceResult:
+    """Replacement cost for one non-book item. Art needs appraisal unless the user said it is a print.
+    A model number (brand_model with a digit) -> one listing, the one nearest the median (`priced`).
+    Otherwise search 'brand + name' and give the 25th-75th percentile of 3+ listings (`range`), with
+    reason `wide_range` when that range is wider than `diverge_ratio`."""
     f = facts.flags(o, user_facts)
     if o.category == "art" and "print" not in f:
         return PriceResult(object_id=o.id, status="needs_appraisal", reason="art_without_print_confirmation")
@@ -199,6 +207,8 @@ class _AnyCategory(PriceSource):
 
 def run(sd: Path, source: PriceSource | None = None, fx: FX | None = None,
         cfg: Config = CFG, deadline: float | None = None) -> None:
+    """Price every object of the sweep in parallel and write prices.json. Country and currency come from meta.json
+    (the user's answer). A failure prices that line as unpriced/price_error; past `deadline` the stage is marked incomplete."""
     sd = Path(sd)
     src: PriceSource = source or deps.price_source()
     rates: FX = fx or deps.fx()
