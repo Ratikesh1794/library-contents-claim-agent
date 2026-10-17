@@ -19,11 +19,11 @@ def scrub(text: str) -> str:
 
 
 def get_json(ns: str, url: str, params: dict | None = None, headers: dict | None = None,
-             key_extra: list | None = None):
+             key_extra: list | None = None, timeout: float | None = None):
     """-> (json, fetched_at). Cache key ignores headers (they hold secrets)."""
     def call():
         try:
-            r = requests.get(url, params=params, headers=headers, timeout=CFG.http_timeout_s)
+            r = requests.get(url, params=params, headers=headers, timeout=timeout or CFG.http_timeout_s)
             r.raise_for_status()
             return r.json()
         except requests.RequestException as e:

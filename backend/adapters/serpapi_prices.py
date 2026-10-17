@@ -17,6 +17,7 @@ import logging
 import os
 import re
 
+from backend.config import CFG
 from backend.core.http import get_json
 from backend.ports import Listing
 
@@ -76,7 +77,8 @@ class SerpApiPrices:
             return []
         gl = {"UK": "gb"}.get(market.upper(), market.lower())
         data, at = get_json("serpapi_shopping", URL, {"engine": "google_shopping", "q": f"{query} book" if books else query,
-                                                      "gl": gl, "hl": "en", "api_key": key}, key_extra=["v1"])
+                                                      "gl": gl, "hl": "en", "api_key": key}, key_extra=["v1"],
+                            timeout=25)       # SerpApi runs a live Google search: 8-15 s is normal
         out = []
         for it in data.get("shopping_results", []) or []:
             got = parse_price(str(it.get("price", "")), market)
@@ -88,6 +90,8 @@ class SerpApiPrices:
             if ("used" if is_used(it) else "new") != condition:
                 continue
             merchant = (it.get("source") or "unknown").strip()
+            if books and any(w in merchant.lower() for w in CFG.book_merchant_blocklist):
+                continue                                    # an audiobook or digital download, not the printed book
             out.append(Listing(title=it.get("title", ""), price=got[0], currency=got[1], url=link, retrieved_at=at,
                                source=f"google_shopping:{merchant}:{market.upper()}", condition=condition, verify_author=books))
         return out

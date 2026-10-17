@@ -32,7 +32,7 @@ LIVE_LIKE = {"shopping_results": [                                   # as return
 
 def patch(monkeypatch, payload=LIVE_LIKE):
     calls = []
-    def fake(ns, url, params, key_extra=None):
+    def fake(ns, url, params, key_extra=None, timeout=None):
         calls.append(params["q"])
         return payload, "2026-10-18T09:00:00Z"
     monkeypatch.setattr(sa, "get_json", fake)
@@ -98,3 +98,13 @@ def test_the_item_name_reaches_the_packet_description():
     objs = [o for o in build_objects(ss, [fr(0), fr(1)], {("f_0000", "f_0001"): shift(0)}) if o.kind == "item"]
     assert objs[0].name == "office chair"
     assert "description" in ItemLine.model_fields
+
+
+def test_audiobook_and_digital_merchants_are_not_book_prices(monkeypatch):
+    import backend.adapters.serpapi_prices as sp
+    rows = [{"title": "The Power of Now", "price": "$2.50", "extracted_price": 2.5, "product_link": "u1", "source": "Audiobooks.com"},
+            {"title": "The Power of Now", "price": "$12.00", "extracted_price": 12.0, "product_link": "u2", "source": "Target"}]
+    monkeypatch.setenv("SERPAPI_API_KEY", "k")
+    monkeypatch.setattr(sp, "get_json", lambda *a, **k: ({"shopping_results": rows}, "2026-10-18T00:00:00Z"))
+    got = sp.SerpApiPrices().search("The Power of Now Eckhart Tolle", "US", "new")
+    assert [l.price for l in got] == [12.0]

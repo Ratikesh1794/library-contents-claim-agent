@@ -174,6 +174,9 @@ class Config:
         "audiobook", "dvd", "poster", "summary of", "study guide", "pdf",
         "and other", "other works", "workbook", "companion", "in 30 minutes", "journal", "notebook",
     )
+    # Shopping merchants that sell a book's audio or digital copy under the plain title (found: Audiobooks.com at $2.50
+    # for The Power of Now, an Etsy PDF at $2.99 for Rich Dad, Poor Dad).
+    book_merchant_blocklist: tuple[str, ...] = ("audiobook", "audible", "etsy", "scribd", "kobo", "google play", "libro.fm")
     listing_noise: tuple[str, ...] = (   # words in listing titles that are not part of the book's title
         "paperback", "hardcover", "hardback", "edition", "book", "books", "novel", "new", "used", "by", "mass",
         "market", "trade", "pb", "hc", "first", "printing", "good", "very", "like", "fine", "vintage", "the", "a",

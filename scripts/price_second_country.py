@@ -35,7 +35,7 @@ def compare(sd: Path, country: str, currency: str, limit: int = 10, source=None,
         for label, c, cur in (("home", home_c, home_cur), ("second", country, currency)):
             r = price.price_book(o, facts, cur, c, source, fx, CFG)
             p = r.replacement
-            row[label] = {"country": c, "currency": cur, "status": r.status, "amount": p.amount if p else None,
+            row[label] = {"country": c, "currency": cur, "status": r.status, "reason": r.reason, "amount": p.amount if p else None,
                           "source": p.source if p else None, "retrieved_at": p.retrieved_at if p else None,
                           "converted": p.converted if p else None, "url": p.url if p else None}
         rows.append(row)
