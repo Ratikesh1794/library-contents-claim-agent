@@ -52,7 +52,9 @@ class _Groups:
 
     def __init__(self, sightings: list[Sighting]):
         self.parent = {s.id: s.id for s in sightings}
-        self.keys = {s.id: ({work_key(s.accepted)} if s.accepted else set()) for s in sightings}
+        # books: the identified work; items: the category. Two groups holding different ones are never merged.
+        self.keys = {s.id: ({work_key(s.accepted)} if s.accepted else
+                            ({"cat:" + s.item.category} if s.item and s.item.category else set())) for s in sightings}
 
     def find(self, x: str) -> str:
         while self.parent[x] != x:
@@ -148,8 +150,7 @@ def group_books(sd: Path, frames: list[Frame], sightings: list[Sighting], cfg: C
     tracker = BookTracker(cfg)
     by_frame: dict[str, list[Sighting]] = defaultdict(list)
     for s in sightings:
-        if s.kind == "book":
-            by_frame[s.frame_id].append(s)
+        by_frame[s.frame_id].append(s)                       # books and items: both are placed on the map
     for f in sorted(frames, key=lambda f: f.t):
         if by_frame.get(f.id):
             tracker.add_sightings(f.id, store.load_image(sd, f.path), by_frame[f.id])

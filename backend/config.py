@@ -82,6 +82,7 @@ class Config:
     map_same_view: float = 0.85    # a frame this much like a stored keyframe is not stored again
     map_match: float = 0.35        # overlap with a registered book that makes a detection that book
     map_absorb: float = 0.3        # overlap that makes a leftover box a piece of a registered book
+    map_item_match: float = 0.5    # IoU that makes an item box the item already on the map (items: no containment rule)
     copy_overlap: float = 0.2      # two boxes of one title in one frame overlapping less than this = apart (side by side)
     copy_min_frames: int = 2       # ...and they must be seen apart in this many frames to be two copies (one frame can be a blur ghost)
     copy_color_max: float = 35.0   # a read is copied to a new sighting only if its crop looks this much like the one that was read (Lab)

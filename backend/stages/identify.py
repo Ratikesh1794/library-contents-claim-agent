@@ -185,8 +185,10 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
     rows = assign_rows([d.bbox for d in books])
     row_of = {id(d): r for d, r in zip(books, rows)}
     owner_of: dict[int, object] = {}
-    if tracker is not None and books:
+    if tracker is not None:                              # every frame goes on the map (items need it even with no book in view)
         owner_of = {id(d): b for d, b in zip(books, tracker.register(frame.id, img, [d.bbox for d in books]))}
+        items = [d for d in dets if d.kind == "item"]
+        owner_of.update({id(d): b for d, b in zip(items, tracker.register_items([d.bbox for d in items]))})
     reuse = [] if tracker is not None else _reusable(sd, frame, img, prev, cfg)
 
     def one(i: int, d: Detection) -> Sighting | None:
@@ -202,7 +204,7 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
         tb = owner_of.get(id(d))
 
         def fin(sg: Sighting) -> Sighting:
-            if tracker is not None and sg.kind == "book":
+            if tracker is not None:
                 tracker.attach(sg, tb)
             return sg
         plan, sig = None, None
@@ -213,6 +215,12 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
                 return None                                  # already known not to be a book
             if plan == "copy":
                 tracker.copy_read(known, s)
+                return fin(s)
+        if d.kind == "item" and tracker is not None:         # describe each item once, not in every frame
+            sig = _signature(crop)
+            what, known = tracker.plan_item(tb, sig)
+            if what == "copy":
+                s.item = known.model_copy()
                 return fin(s)
         if d.kind == "book" and reuse:                       # older shortcut (no tracker): same book in the previous frame
             hit = max(((track.iou(box, d.bbox), ps) for box, ps in reuse), default=(0, None), key=lambda t: t[0])
@@ -242,6 +250,8 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
             try:
                 if d.kind == "item":
                     s.item = vision.describe_item(crop)
+                    if tracker is not None:
+                        tracker.note_item(tb, s.item, sig)
                 elif d.layout == "cover_only":
                     s.reason = "stack_hidden"
                 else:

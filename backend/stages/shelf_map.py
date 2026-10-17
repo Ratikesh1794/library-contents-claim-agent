@@ -91,6 +91,11 @@ def _overlap(a, b) -> float:
     return max(inter / (_area(a) + _area(b) - inter), 0.7 * inter / (min(_area(a), _area(b)) or 1))
 
 
+def _iou(a, b) -> float:
+    inter = _inter(a, b)
+    return inter / (_area(a) + _area(b) - inter) if inter > 0 else 0.0
+
+
 def _cut(box, w: int, h: int, m: int = 3) -> bool:
     """Does the box touch the frame border (the book is probably cut off)?"""
     return box[0] <= m or box[1] <= m or box[2] >= w - m or box[3] >= h - m
@@ -101,6 +106,7 @@ class ShelfMap:
         self.cfg = cfg
         self.keys: list[_Key] = []
         self.books: list[Book] = []
+        self.items: list[Book] = []                              # chairs, cabinets...: matched by IoU only (see place_items)
         self.n_comp = 0
         self._next_id = 0
         self._last: tuple[int, np.ndarray] | None = None        # (component, outline on the map) of the last frame
@@ -184,7 +190,7 @@ class ShelfMap:
         return b
 
     def _swallow(self, keep: Book, gone: Book) -> None:
-        """`gone` is the same book as `keep` (or a piece of it): fold it in and point it at `keep`."""
+        """`gone` is the same book (or item) as `keep`, or a piece of it: fold it in and point it at `keep`."""
         keep.n += gone.n
         keep.partial = keep.partial and gone.partial
         if _area(gone.box) > _area(keep.box):
@@ -196,6 +202,7 @@ class ShelfMap:
                 keep.meta.setdefault(k, v)
         gone.into = keep
         self.books = [b for b in self.books if b is not gone]
+        self.items = [b for b in self.items if b is not gone]
 
     def _merge(self, main: int, other: int, T: np.ndarray) -> None:
         """Move component `other` into `main`'s map (T: other's map -> main's map); fold in books seen in both."""
@@ -214,8 +221,49 @@ class ShelfMap:
                 continue
             gone.add(i)
             self._swallow(keep[j], moved[i])
+        moved_items = [b for b in self.items if b.comp == other]
+        for b in moved_items:
+            b.box, b.comp = _to_map(T, b.box), main
+        keep_items = [b for b in self.items if b.comp == main and b not in moved_items]
+        ipairs = sorted(((_iou(m.box, k.box), i, j) for i, m in enumerate(moved_items) for j, k in enumerate(keep_items)), reverse=True)
+        igone: set[int] = set()
+        for sc, i, j in ipairs:
+            if sc < self.cfg.map_item_match or i in igone:
+                continue
+            igone.add(i)
+            self._swallow(keep_items[j], moved_items[i])
         self.stats["merged_components"] += 1
         self.stats["merged_books"] += len(gone)
+
+    def place_items(self, boxes: list[tuple[int, int, int, int]]) -> list[Book | None]:
+        """Place the item boxes (chairs, cabinets, lamps...) of the frame just registered by add_frame on the map.
+        Separate from the books so a cabinet's box never swallows the books in it; matched by IoU only (items are boxed
+        loosely, but a containment rule would merge a lamp with the table it stands on). -> the Item for each box."""
+        if self._view is None or self._last is None or not boxes:
+            return [None] * len(boxes)
+        H = self._view[0]
+        comp = self._last[0]
+        mine = [b for b in self.items if b.comp == comp]
+        mbox = [_to_map(H, b) for b in boxes]
+        cands = sorted(((_iou(mbox[i], b.box), i, j) for i in range(len(boxes)) for j, b in enumerate(mine)), reverse=True)
+        owners: list[Book | None] = [None] * len(boxes)
+        used: set[int] = set()
+        for sc, i, j in cands:
+            if sc < self.cfg.map_item_match:
+                break
+            if owners[i] is None and j not in used:
+                owners[i] = mine[j]
+                used.add(j)
+                mine[j].n += 1
+                if _area(mbox[i]) > _area(mine[j].box):
+                    mine[j].box = mbox[i]
+        for i in range(len(boxes)):
+            if owners[i] is None:
+                b = Book(self._next_id, mbox[i], comp, partial=False)
+                self._next_id += 1
+                self.items.append(b)
+                owners[i] = b
+        return owners
 
     def locate(self, book: Book) -> tuple[float, float, int, int] | None:
         """Where `book` is in the CURRENT camera view's pixel coordinates -> (x, y, frame w, frame h), or None if it is on

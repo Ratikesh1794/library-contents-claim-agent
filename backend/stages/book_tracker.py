@@ -40,13 +40,21 @@ class BookTracker:
         callers then simply read everything, as they did before the map existed)."""
         with self._lock:
             self._view_frame, self._view = frame_id, []
-        if not boxes:
-            return []
-        with self._lock:
             try:
                 return list(self.map.add_frame(img, [tuple(b) for b in boxes], frame_id)["owners"])
             except Exception as e:                       # never let the map take the live path down
                 log.warning("shelf map failed on %s: %s", frame_id, e)
+                return [None] * len(boxes)
+
+    def register_items(self, boxes: list) -> list[Book | None]:
+        """Place the item boxes of the frame just registered by `register` -> the item each belongs to."""
+        if not boxes:
+            return []
+        with self._lock:
+            try:
+                return list(self.map.place_items([tuple(b) for b in boxes]))
+            except Exception as e:
+                log.warning("shelf map failed placing items: %s", e)
                 return [None] * len(boxes)
 
     def attach(self, s: Sighting, book: Book | None) -> None:
@@ -67,6 +75,9 @@ class BookTracker:
         from disk) and attach them."""
         books = [s for s in sightings if s.kind == "book"]
         for s, b in zip(books, self.register(frame_id, img, [s.bbox for s in books])):
+            self.attach(s, b)
+        items = [s for s in sightings if s.kind == "item"]
+        for s, b in zip(items, self.register_items([s.bbox for s in items])):
             self.attach(s, b)
 
     def view(self, frame_id: str) -> list[tuple[Sighting, Book]]:
@@ -97,7 +108,9 @@ class BookTracker:
 
     @property
     def count(self) -> int:
-        return len(self.groups())
+        """Distinct BOOKS found so far (items are tracked too, but are not counted here)."""
+        with self._lock:
+            return len({canonical(b).id for s, b in self._records if s.kind == "book"})
 
     # ---------------------------------------------------------------- read once
     def _same_look(self, m: dict, sig) -> bool:
@@ -129,6 +142,25 @@ class BookTracker:
             if tries and (tries >= self.cfg.read_tries or sharp < self.cfg.reread_gain * m.get("sharp", 0.0)):
                 return "skip", None
             return "read", None
+
+    def plan_item(self, item: Book | None, sig=None) -> tuple[str, object | None]:
+        """("copy", ItemGuess) if this item was already described and the crop still looks like it, else ("read", None)."""
+        if item is None:
+            return "read", None
+        with self._lock:
+            m = canonical(item).meta
+            if m.get("item") is not None and self._same_look(m, sig):
+                return "copy", m["item"]
+            return "read", None
+
+    def note_item(self, item: Book | None, guess, sig=None) -> None:
+        if item is None or guess is None or not getattr(guess, "category", None):
+            return
+        with self._lock:
+            m = canonical(item).meta
+            m.setdefault("item", guess)
+            if sig is not None:
+                m.setdefault("sig", tuple(float(v) for v in sig))
 
     def note_read(self, book: Book | None, sharp: float, is_book: bool = True, sig=None) -> None:
         if book is None:

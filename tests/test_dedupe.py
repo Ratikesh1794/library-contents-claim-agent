@@ -95,3 +95,12 @@ def test_a_title_seen_twice_apart_in_only_one_frame_is_a_ghost_not_a_second_copy
 def test_the_same_pair_apart_in_two_frames_is_two_copies():
     ss = [book(0, 100, "Dune"), book(0, 150, "Dune"), book(1, 70, "Dune"), book(1, 120, "Dune")]
     assert len(build_objects(ss, [fr(0), fr(1)], {("f_0000", "f_0001"): shift(-30)})) == 2
+
+
+def test_items_of_different_categories_are_never_merged_even_if_the_map_put_them_together():
+    ss = [item(0, 100, "lamp"), item(1, 100, "table")]
+    objs = build_objects(ss, [fr(0), fr(1)], None, book_groups=[[ss[0].id, ss[1].id]])
+    assert len(objs) == 2
+    same = build_objects([item(0, 100, "lamp"), item(1, 100, "lamp")], [fr(0), fr(1)], None,
+                         book_groups=[["i_0_100", "i_1_100"]])
+    assert len(same) == 1

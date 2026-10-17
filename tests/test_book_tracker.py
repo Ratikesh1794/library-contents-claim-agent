@@ -130,3 +130,59 @@ def test_a_box_that_lands_on_a_read_book_but_shows_another_book_is_read_not_copi
     first = identify.identify_frame(sd, frames[0], v, cat, CFG, tracker=t)
     second = identify.identify_frame(sd, frames[1], v, cat, CFG, tracker=t)
     assert first[0].accepted.title == "Dune" and second[0].accepted.title == "Emma"      # a copy would have said "Dune"
+
+
+# ---------------------------------------------------------------- items (chairs, cabinets...): described once
+class CountingVision(FakeVision):
+    def __init__(self, *a, **k): super().__init__(*a, **k); self.describe_calls = 0
+    def describe_item(self, crop):
+        self.describe_calls += 1
+        return super().describe_item(crop)
+
+
+LAMP = Detection((300, 300, 500, 500), "item")
+
+
+def test_an_item_is_described_once_however_many_frames_show_it(tmp_path):
+    sd, frames = same_view(tmp_path, 3)
+    v = CountingVision([LAMP])
+    t = BookTracker()
+    out = identify_all(sd, frames, v, FakeCatalogue({}), t)
+    assert v.describe_calls == 1
+    assert [s[0].item.category for s in out] == ["lamp"] * 3
+
+
+def test_an_item_box_that_shows_something_else_is_described_not_copied(tmp_path):
+    import cv2
+    sd, frames = same_view(tmp_path, 2)
+    img = cv2.imread(str(sd / frames[1].path))
+    x0, y0, x1, y1 = LAMP.bbox
+    img[y0:y1, x0:x1] = np.random.default_rng(9).integers(0, 40, (y1 - y0, x1 - x0, 3)).astype(np.uint8)   # a darker object
+    cv2.imwrite(str(sd / frames[1].path), img)
+    v = CountingVision([LAMP])
+    t = BookTracker()
+    identify_all(sd, frames, v, FakeCatalogue({}), t)
+    assert v.describe_calls == 2
+
+
+def test_items_are_never_counted_as_books():
+    import cv2
+    t = BookTracker()
+    img = np.random.default_rng(1).integers(0, 255, (700, 600, 3), dtype=np.uint8)
+    book = Sighting(id="b", frame_id="f0", kind="book", bbox=(100, 50, 160, 450))
+    lamp = Sighting(id="i", frame_id="f0", kind="item", bbox=(300, 300, 500, 500))
+    t.add_sightings("f0", img, [book, lamp])
+    assert t.count == 1                                                          # the book, not the lamp
+    assert sorted(len(g) for g in t.groups()) == [1, 1]                          # but both are tracked
+
+
+def test_the_item_registry_matches_by_iou_and_stays_apart_from_books():
+    from backend.stages.shelf_map import ShelfMap
+    img = np.random.default_rng(2).integers(0, 255, (700, 900, 3), dtype=np.uint8)
+    m = ShelfMap()
+    m.add_frame(img, [(100, 50, 160, 450)])
+    a = m.place_items([(300, 300, 500, 500)])[0]
+    b = m.place_items([(305, 302, 505, 498)])[0]                                 # the same object a moment later
+    c = m.place_items([(600, 300, 800, 500)])[0]                                 # another object
+    inside = m.place_items([(320, 320, 400, 400)])[0]                            # small box inside the first: NOT the same item
+    assert a is b and a is not c and inside is not a and len(m.items) == 3 and m.count == 1
