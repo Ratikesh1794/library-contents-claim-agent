@@ -33,6 +33,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from backend import deps, pipeline
+from backend.stages.book_tracker import BookTracker
 from backend.core import store
 from backend.live import agent, voice_pipecat
 from backend.stages import dedupe, identify, track
@@ -71,6 +72,7 @@ class SweepSession:
     finished: bool = False
     call_id: str | None = None                                      # current OpenAI WebRTC call
     voice_task: asyncio.Task | None = None                          # sideband controller for that call
+    tracker: BookTracker | None = None                              # shelf map: each book counted and read once
 
     def now(self) -> float:
         return time.time() - self.t0
@@ -178,6 +180,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
         """Identify keyframes as they arrive; update the panel and let the Coach react."""
         d = app.state.deps
         vision, cat = d["vision"] or deps.vision(), d["catalogue"] or deps.catalogue()
+        s.tracker = s.tracker or BookTracker(cfg)
         anchor = None                                # (frame, sightings) of the last ANALYSED frame
         while True:
             frame: Frame = await s.frame_q.get()
@@ -191,8 +194,10 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
             try:
                 sightings = await asyncio.to_thread(identify.carry_over, s.sd, frame, anchor, cfg)
                 if sightings is None:                # something new in view: analyse it
-                    sightings = await asyncio.to_thread(identify.identify_frame, s.sd, frame, vision, cat, cfg, anchor)
+                    sightings = await asyncio.to_thread(identify.identify_frame, s.sd, frame, vision, cat, cfg, anchor, s.tracker)
                     anchor = (frame, sightings)
+                else:                                # copied from the last analysed frame: still place it on the shelf map
+                    await asyncio.to_thread(identify.register_carried, s.sd, frame, sightings, s.tracker)
                 store.write(s.sd, f"sightings/{frame.id}.json", sightings)
             except Exception as e:
                 log.warning("identify %s failed: %s", frame.id, e)
@@ -212,18 +217,20 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
                 else:
                     await s.inject.put(f"STATUS {m['text']}")
 
-    def current_objects(sd: Path):
-        """Same dedupe as the pipeline (tracking included), on the frames identified so far.
+    def current_objects(s: SweepSession):
+        """Same dedupe as the pipeline (books by the shelf map, items tracked), on the frames identified so far.
         -> (objects, frames uploaded, frames identified)."""
+        sd = s.sd
         all_frames = store.read(sd, "frames.json", list[Frame], default=[])
         frames = [f for f in all_frames if (sd / "sightings" / f"{f.id}.json").exists()]
         sightings = []
         for f in frames:
             sightings += store.read(sd, f"sightings/{f.id}.json", list[Sighting], default=[])
-        return dedupe.build_objects(sightings, frames, track.links(sd, frames, cfg), cfg), len(all_frames), len(frames)
+        groups = s.tracker.groups() if s.tracker else None
+        return dedupe.build_objects(sightings, frames, track.links(sd, frames, cfg), cfg, groups), len(all_frames), len(frames)
 
     async def push_inventory(s: SweepSession):
-        objs, n_frames, n_done = await asyncio.to_thread(current_objects, s.sd)   # CPU work: off the event loop
+        objs, n_frames, n_done = await asyncio.to_thread(current_objects, s)   # CPU work: off the event loop
         books = [o for o in objs if o.kind == "book"]
         common = lambda o: {"id": o.id, "status": o.status, "reason": o.reason, "frame": Path(o.frame_ref).name,
                             "bbox": o.bbox, "seen": len(o.sighting_ids)}
@@ -242,6 +249,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
         await s.down.put({"type": "status", "text": "Building your claim packet…"})
         try:
             injected = {k: v for k, v in app.state.deps.items() if k in ("vision", "catalogue") and v is not None}
+            injected["tracker"] = s.tracker                       # books already read live are not read again
             packet = await asyncio.to_thread(pipeline.run, s.sd, None, None, cfg, {**injected, **(pipeline_deps or {})})
         except Exception as e:
             log.exception("pipeline failed")

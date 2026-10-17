@@ -143,3 +143,23 @@ def test_connect_gives_the_phone_link_and_a_qr_code(client):
     c = client.get("/api/connect", headers=H).json()
     assert c["phone_url"].endswith(f"/?t={TOK}") and c["qr_svg"].lstrip().startswith("<") and "svg" in c["qr_svg"]
     assert c["https"] is False                                    # test client is plain http: the page warns
+
+
+def test_the_same_view_sent_again_and_again_stays_one_book_in_the_inventory(client):
+    sid = client.post("/api/sweeps", json={"country": "US"}, headers=H).json()["sweep_id"]
+    with client.websocket_connect(f"/ws/live?sweep={sid}&t={TOK}") as ws:
+        for k in range(3):                                         # the user lingers: three keyframes of the same shelf
+            client.post(f"/api/sweeps/{sid}/frames?seq={k}&t={k * 1.2}&w=100&h=700", content=jpeg(), headers=H)
+        handled, inventory = 0, None
+        while handled < 3:                                         # each "frame" event covers itself + any skipped ones
+            m = ws.receive_json()
+            if m["type"] == "inventory":
+                inventory = m
+            elif m["type"] == "frame":
+                handled += 1 + m.get("skipped", 0)
+        while True:                                                # the inventory that follows the last frame event
+            m = ws.receive_json()
+            if m["type"] == "inventory":
+                inventory = m
+                break
+    assert inventory["counts"]["books"] == 1 and inventory["counts"]["analysed"] >= 1

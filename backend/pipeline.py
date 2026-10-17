@@ -41,7 +41,7 @@ def run(sd: Path, only: str | None = None, start: str | None = None, cfg: Config
     def want(n): return (only == n) if only else (ORDER.index(n) >= ORDER.index(start or "identify"))
 
     if want("identify"):
-        timed("identify", lambda: identify.run(sd, d.get("vision"), d.get("catalogue"), cfg, time.time() + cfg.budget_identify_s))
+        timed("identify", lambda: identify.run(sd, d.get("vision"), d.get("catalogue"), cfg, time.time() + cfg.budget_identify_s, d.get("tracker")))
     if want("dedupe"):
         timed("dedupe", lambda: dedupe.run(sd, cfg))
     parallel = []

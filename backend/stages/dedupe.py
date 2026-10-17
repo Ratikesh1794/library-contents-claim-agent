@@ -2,9 +2,11 @@
 
 Goal: one Object per physical book/item, WITHOUT ever dropping an unidentified book (count stays honest).
 
-  1. Tracking (backend/stages/track.py): consecutive overlapping frames are aligned; a box that projects onto a box of
-     the same kind in the next frame(s) is the same object. This works for books that were never read, which
-     is what made the count explode before (every unread sighting became its own "book").
+  1. BOOKS are grouped by position (backend/stages/shelf_map.py): every frame is registered on a shared map of the
+     shelf and a book that lands on an already-registered spot is the same book, however the camera moved (forward,
+     backward, back to an earlier shelf), and whether or not its title was readable.
+     ITEMS are tracked frame to frame (backend/stages/track.py): consecutive overlapping frames are aligned; a box that
+     projects onto a box of the same kind in the next frame(s) is the same object.
   2. Never merge two different identified works (a tracking slip must not turn two books into one).
   3. Coming back to a shelf later (frames that don't overlap): identified groups with the same work are merged
      unless they were seen side by side in one frame (then they are two copies).
@@ -12,6 +14,7 @@ Goal: one Object per physical book/item, WITHOUT ever dropping an unidentified b
 """
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from pathlib import Path
 from statistics import median
@@ -21,9 +24,12 @@ import numpy as np
 
 from backend.core import store
 from backend.stages import track
+from backend.stages.book_tracker import BookTracker
 from backend.stages.catalogue import work_key
 from backend.config import CFG, Config
 from backend.schemas import BBox, Frame, Object, Reason, Sighting
+
+log = logging.getLogger(__name__)
 
 
 def assign_rows(boxes: list[tuple[int, int, int, int]]) -> list[int]:
@@ -136,8 +142,23 @@ def _make(oid: str, kind: Literal["book", "item"], group: list[Sighting], frames
     return o
 
 
+def group_books(sd: Path, frames: list[Frame], sightings: list[Sighting], cfg: Config = CFG) -> list[list[str]]:
+    """Sighting ids per physical book, from the shelf map. Frames are replayed in time order.
+    Raises FileNotFoundError if a frame image is missing (the caller then falls back to frame-to-frame tracking)."""
+    tracker = BookTracker(cfg)
+    by_frame: dict[str, list[Sighting]] = defaultdict(list)
+    for s in sightings:
+        if s.kind == "book":
+            by_frame[s.frame_id].append(s)
+    for f in sorted(frames, key=lambda f: f.t):
+        if by_frame.get(f.id):
+            tracker.add_sightings(f.id, store.load_image(sd, f.path), by_frame[f.id])
+    return tracker.groups()
+
+
 def build_objects(sightings: list[Sighting], frames: list[Frame],
-                  links: dict[tuple[str, str], np.ndarray | None] | None = None, cfg: Config = CFG) -> list[Object]:
+                  links: dict[tuple[str, str], np.ndarray | None] | None = None, cfg: Config = CFG,
+                  book_groups: list[list[str]] | None = None) -> list[Object]:
     fr = {f.id: f for f in frames}
     sightings = [s for s in sightings if s.frame_id in fr]
     by_id = {s.id: s for s in sightings}
@@ -157,11 +178,17 @@ def build_objects(sightings: list[Sighting], frames: list[Frame],
                 row_pos[s.id] = (f"{fid}:{rname}", i)
 
     g = _Groups(sightings)
-    # 1. tracking across overlapping frames
+    # 1. books: the shelf map's groups (if given). Never merged across different identified works (see _Groups).
+    for ids in book_groups or []:
+        ids = [i for i in ids if i in by_id]
+        for other in ids[1:]:
+            g.union(ids[0], other)
+    # ...and tracking across overlapping frames: items always; books too when there is no shelf map
     for (a, b), H in (links or {}).items():
         if H is not None and a in by_frame and b in by_frame:
             for sa, sb in _link_pairs(by_frame[a], by_frame[b], H, cfg):
-                g.union(sa.id, sb.id)
+                if book_groups is None or sa.kind == "item":
+                    g.union(sa.id, sb.id)
 
     # 3. same identified work in groups that were never in the same frame => the user came back to it
     groups = g.groups()
@@ -196,4 +223,9 @@ def run(sd: Path, cfg: Config = CFG) -> None:
     sd = Path(sd)
     frames = store.read(sd, "frames.json", list[Frame], default=[])
     sightings = store.read(sd, "sightings.json", list[Sighting], default=[])
-    store.write(sd, "objects.json", build_objects(sightings, frames, track.links(sd, frames, cfg), cfg))
+    try:
+        groups = group_books(sd, frames, sightings, cfg)
+    except Exception as e:                           # no shelf map (e.g. a frame image is gone): older tracking
+        log.warning("shelf map unavailable, tracking books frame to frame instead: %s", e)
+        groups = None
+    store.write(sd, "objects.json", build_objects(sightings, frames, track.links(sd, frames, cfg), cfg, groups))

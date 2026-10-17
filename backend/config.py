@@ -74,6 +74,15 @@ class Config:
     detect_dup_iou: float = 0.5             # same-kind boxes overlapping this much are one object
     detect_dup_ioa: float = 0.8             # ...or a box this much inside a larger one (fragments of one book/chair)
 
+    # --- shelf map (backend/stages/shelf_map.py): count each book once by its position on a map of the shelf
+    map_candidates: int = 4        # earlier keyframes (nearest first) a new frame is lined up against
+    map_cross: int = 2             # keyframes checked in each OTHER map, to join maps a frame bridges
+    map_max_search: int = 300      # keyframes searched when a frame lines up with nothing nearby
+    map_search_budget_s: float = 2.0   # time limit for lining up one frame
+    map_same_view: float = 0.85    # a frame this much like a stored keyframe is not stored again
+    map_match: float = 0.35        # overlap with a registered book that makes a detection that book
+    map_absorb: float = 0.3        # overlap that makes a leftover box a piece of a registered book
+
     # --- identify
     min_box_px: int = 900
     max_spine_aspect: float = 40.0
@@ -91,6 +100,10 @@ class Config:
     identify_workers: int = 6
     crop_workers: int = 6        # spine reads run in parallel within one frame
     reuse_iou: float = 0.5       # a box that tracks onto an already-identified box reuses that read (no new API call)
+    # Read once per book (BookTracker): an identified book is never read again; one that failed to read is retried only
+    # from a crop at least reread_gain times sharper, at most read_tries reads per book.
+    read_tries: int = 3
+    reread_gain: float = 1.5
     # "Only analyse what is new": a live keyframe mostly showing the last ANALYSED frame copies its results instead of
     # calling the vision model again (identify.carry_over). Never when the user moved closer or the view had fixable failures.
     novelty_skip_coverage: float = 0.85   # skip detection if this much of the new frame was already analysed

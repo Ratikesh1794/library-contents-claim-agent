@@ -32,6 +32,7 @@ from backend.stages import catalogue as cat
 from backend import deps
 from backend.core import store
 from backend.stages import quality, track
+from backend.stages.book_tracker import BookTracker
 from backend.config import CFG, Config
 from backend.stages.dedupe import assign_rows
 from backend.ports import Catalogue, Detection, Vision
@@ -138,15 +139,21 @@ def _read_book(crop: np.ndarray, layout, bbox, vision: Vision, catalogue: Catalo
 
 
 def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
-                   cfg: Config = CFG, prev: tuple[Frame, list[Sighting]] | None = None) -> list[Sighting]:
-    """`prev` = (previous frame, its sightings): enables "read once" reuse for books already identified."""
+                   cfg: Config = CFG, prev: tuple[Frame, list[Sighting]] | None = None,
+                   tracker: BookTracker | None = None) -> list[Sighting]:
+    """With a `tracker` (the normal case) each book is placed on the shelf map first, so a book already read in ANY
+    earlier frame is never read again, and a book the reader called "not a book" is dropped without another read.
+    Without one, `prev` (previous frame, its sightings) gives the older "reuse from the last frame" shortcut."""
     img = store.load_image(sd, frame.path)
     H, W = img.shape[:2]
     dets = [d for d in vision.detect(img) if _valid(d, cfg)]
     books = [d for d in dets if d.kind == "book"]
     rows = assign_rows([d.bbox for d in books])
     row_of = {id(d): r for d, r in zip(books, rows)}
-    reuse = _reusable(sd, frame, img, prev, cfg)
+    owner_of: dict[int, object] = {}
+    if tracker is not None and books:
+        owner_of = {id(d): b for d, b in zip(books, tracker.register(frame.id, img, [d.bbox for d in books]))}
+    reuse = [] if tracker is not None else _reusable(sd, frame, img, prev, cfg)
 
     def one(i: int, d: Detection) -> Sighting | None:
         s = Sighting(id=f"s_{frame.id[2:]}_{i:02d}", frame_id=frame.id, kind=d.kind, bbox=d.bbox,
@@ -158,7 +165,21 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
         q = quality.score(crop, cfg)
         s.crop_blur = q["blur"]
         x0, y0, x1, y1 = d.bbox
-        if d.kind == "book":                         # read once: same book already identified in the previous frame
+        tb = owner_of.get(id(d))
+
+        def fin(sg: Sighting) -> Sighting:
+            if tracker is not None and sg.kind == "book":
+                tracker.attach(sg, tb)
+            return sg
+        plan = None
+        if d.kind == "book" and tracker is not None:         # read once per physical book, whatever frame it was read in
+            plan, known = tracker.plan(tb, q["blur"])
+            if plan == "drop":
+                return None                                  # already known not to be a book
+            if plan == "copy":
+                tracker.copy_read(known, s)
+                return fin(s)
+        if d.kind == "book" and reuse:                       # older shortcut (no tracker): same book in the previous frame
             hit = max(((track.iou(box, d.bbox), ps) for box, ps in reuse), default=(0, None), key=lambda t: t[0])
             if hit[0] >= cfg.reuse_iou:
                 ps = hit[1]
@@ -179,6 +200,8 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
                 soft = "partial"
             if d.layout == "cover_only":
                 soft = "stack_hidden"
+        if s.reason is None and plan == "skip":              # read before, and this crop is not clearly better
+            s.reason = soft or "low_confidence"
         if s.reason is None:
             crop = _upscale(crop, cfg)       # rectify with marker homography would go here
             try:
@@ -189,6 +212,8 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
                 else:
                     m, rot, raw, legible, is_book = _read_book(crop, d.layout, (0, 0, crop.shape[1], crop.shape[0]),
                                                                   vision, catalogue, cfg)   # aspect of the straightened crop
+                    if tracker is not None:
+                        tracker.note_read(tb, q["blur"], is_book)
                     if not is_book:
                         log.info("dropped %s: the reader says it is not a book", s.id)
                         return None                  # not a book: never counted
@@ -200,7 +225,7 @@ def identify_frame(sd: Path, frame: Frame, vision: Vision, catalogue: Catalogue,
             except Exception as e:
                 log.warning("identify crop failed: %s", e)
                 s.reason = soft or "low_confidence"
-        return s
+        return fin(s)
 
     with ThreadPoolExecutor(max(1, cfg.crop_workers)) as ex:      # reads in parallel; order is kept
         return [x for x in ex.map(one, range(len(dets)), dets) if x is not None]
@@ -261,6 +286,15 @@ def carry_over(sd: Path, frame: Frame, anchor: tuple[Frame, list[Sighting]] | No
     return out or None
 
 
+def register_carried(sd: Path, frame: Frame, sightings: list[Sighting], tracker: BookTracker) -> None:
+    """A frame whose sightings were copied (carry_over) still has to be placed on the shelf map, or its books would
+    look like new ones to dedupe."""
+    try:
+        tracker.add_sightings(frame.id, store.load_image(sd, frame.path), sightings)
+    except FileNotFoundError:
+        pass
+
+
 def _reusable(sd: Path, frame: Frame, img: np.ndarray, prev, cfg: Config) -> list[tuple]:
     """Identified boxes from the previous frame, projected into this frame: [(box_here, sighting), ...]."""
     if not prev:
@@ -277,21 +311,27 @@ def _reusable(sd: Path, frame: Frame, img: np.ndarray, prev, cfg: Config) -> lis
 
 
 def run(sd: Path, vision: Vision | None = None, catalogue: Catalogue | None = None,
-        cfg: Config = CFG, deadline: float | None = None) -> None:
+        cfg: Config = CFG, deadline: float | None = None, tracker: BookTracker | None = None) -> None:
     """Identify every frame that has no sightings yet, in time order, carrying results over from the last
-    analysed frame where the view is already covered (same rule as the live path)."""
+    analysed frame where the view is already covered (same rule as the live path). Books are read once: pass the
+    live session's `tracker`, or the frames already analysed are replayed into a fresh one."""
     sd = Path(sd)
     vision, catalogue = vision or deps.vision(), catalogue or deps.catalogue()
     frames = sorted(store.read(sd, "frames.json", list[Frame], default=[]), key=lambda f: f.t)
     (sd / "sightings").mkdir(exist_ok=True)
     anchor: tuple[Frame, list[Sighting]] | None = None
     ok = True
+    pending = any(not (sd / "sightings" / f"{f.id}.json").exists() for f in frames)
+    replay = pending and tracker is None             # no live tracker: rebuild the shelf map from what is done
+    tracker = (tracker or BookTracker(cfg)) if pending else None
     for f in frames:
         path = sd / "sightings" / f"{f.id}.json"
         if path.exists():                            # done live: just keep track of the last analysed frame
             done = store.read(sd, f"sightings/{f.id}.json", list[Sighting], default=[])
             if not is_carried(done):
                 anchor = (f, done)
+            if replay:
+                register_carried(sd, f, done, tracker)
             continue
         if deadline and time.time() > deadline:
             ok = False
@@ -299,8 +339,10 @@ def run(sd: Path, vision: Vision | None = None, catalogue: Catalogue | None = No
         try:
             sightings = carry_over(sd, f, anchor, cfg)
             if sightings is None:
-                sightings = identify_frame(sd, f, vision, catalogue, cfg, prev=anchor)
+                sightings = identify_frame(sd, f, vision, catalogue, cfg, prev=anchor, tracker=tracker)
                 anchor = (f, sightings)
+            else:
+                register_carried(sd, f, sightings, tracker)
             store.write(sd, f"sightings/{f.id}.json", sightings)
         except Exception as e:                       # NFR-E5: one bad frame must not kill the stage
             log.warning("frame %s failed: %s", f.id, e)
