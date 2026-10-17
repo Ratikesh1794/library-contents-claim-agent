@@ -296,7 +296,18 @@ A book is the same book if it sits in the same place on the shelf. That holds wh
 3. **Merges leave a trail.** A swallowed book keeps `into`, so `canonical(book)` is always the book to count. `meta` (what was read) travels with merges except "not a book".
 4. **Cost.** Keyframes are stored only for views not already stored (`map_same_view` 0.85). Measured: ~0.05 s per frame on a real sweep (max 0.4 s); the 15 books of a 54-frame sweep needed 14 registrations and 1 lost frame.
 
-`BookTracker` (`book_tracker.py`) owns one map per sweep plus the bookkeeping: which sighting belongs to which book (`groups()`) and what was read from each (`plan()`, `note_read()`). It is thread-safe (the reads of one frame run in parallel) and never lets a map error take the live path down (the frame is simply read as before).
+`BookTracker` (`book_tracker.py`) owns one map per sweep (books and items; `count` counts books only) plus the bookkeeping: which sighting belongs to which book (`groups()`) and what was read from each (`plan()`, `note_read()`). It is thread-safe (the reads of one frame run in parallel) and never lets a map error take the live path down (the frame is simply read as before).
+
+### 7.1b Guards against wrong or doubled books (added after checking real sweeps)
+
+Found by looking at what was wrong in real results, not by tuning a sharpness threshold (the wrong reads were as sharp as the right ones):
+- **Contradicting orientations** (`_read_book`): a garbled orientation can make the reader complete a famous title from memory ("The Art of War | Sun Tzu") that matches the catalogue exactly, while another orientation read a different legible title ("THE PHILOSOPHY OF SCIENCE"). If any legible multi-word title read in another orientation is less than `rotation_conflict_T` (0.6) similar to the accepted one, the book is not identified (`low_confidence`).
+- **Group boxes** (`_drop_group_boxes`): with at least `group_min_books` (4) books in the frame, a book box larger than `group_area_factor` (6x) the median area and squarish (`group_max_aspect` 2.0) is one box around several books and is dropped. Wide flat books and face-out covers (about 4x, still elongated or small) are kept.
+- **Look before copying a read** (`BookTracker._same_look`): the crop's mean Lab colour is stored with the read; a later crop is given that read only if its colour is within `copy_color_max` (35). The map can drift, and then a box of a different book lands on a registered one and silently inherited its title (seen as *Fooled by Randomness* on three different books); now it is read on its own, and dedupe keeps books with different identified works apart.
+- **Two copies need two frames** (dedupe): same-title groups are two copies only if clearly separate boxes were seen side by side in at least `copy_min_frames` (2) frames; a blurred frame can show one spine twice, shifted by about its own width.
+- **Work identity** (`catalogue.work_key`) = title + the author's surname, so "M. J. DeMarco", "MJ DeMarco" and "DeMarco, M. J." are one work (two catalogues had spelled the author differently and one book counted twice).
+
+Measured on two real, badly blurred phone sweeps (same frames, real detector, OpenAI reads): 15 books / 11 identified with a title three times -> 19 / 19 with no repeated title; 25 / 15 with three repeated titles -> 29 / 19 with none.
 
 ### 7.2 Read once per book (in `identify_frame`)
 
@@ -305,7 +316,7 @@ Before reading, each book box is placed on the map; `plan()` then decides: **dro
 ### 7.3 Final grouping (`dedupe.run`)
 
 1. **Books:** `group_books` replays the frames in time order through a fresh `BookTracker` and unions each book's sightings. If a frame image is missing it falls back to frame-to-frame tracking for books.
-2. **Items** keep the older frame-to-frame tracking: each keyframe is aligned to the next `track_span` (2) keyframes (links cached in `links.json`); boxes of frame A projected into B match one-to-one by IoU ≥ `track_iou` (0.3), and for items "one box inside the other" also counts (`item_contain_weight`) when the categories agree.
+2. **Items** are tracked by both the shelf map (a separate registry, matched by IoU >= `map_item_match` 0.5 only, so a cabinet never swallows the books in it) and frame-to-frame links. Each item is described once (`plan_item`/`note_item`, with the same look check); the final grouping uses map + links (on two real sweeps 44 -> 34 and 32 -> 31 item objects, the lowest and most stable of the three variants) and never merges two items of different categories. The frame links: each keyframe is aligned to the next `track_span` (2) keyframes (links cached in `links.json`); boxes of frame A projected into B match one-to-one by IoU ≥ `track_iou` (0.3), and for items "one box inside the other" also counts (`item_contain_weight`) when the categories agree.
 3. **Never merge two different works.** The union-find refuses to join groups holding different accepted titles.
 4. **Same title in two groups = one book unless seen apart.** Two groups with the same identified work are merged, unless in some frame a sighting of each has a clearly separate box (overlap < `copy_overlap` 0.2): that is two copies side by side. Overlapping boxes of one title in one frame are the same book seen twice (whole and a piece, or at two zooms).
 5. **Identity.** A group takes its title from its best accepted read, so one good read names the book in every frame. Unidentified groups keep their most common reason.
@@ -452,7 +463,8 @@ identify: min_box_px=900 occl_iou=0.3 title_match_T=0.85 author_match_T=0.8 publ
           crop_workers=6 identify_workers=6 reuse_iou=0.5
 novelty:  novelty_skip_coverage=0.85 novelty_max_zoom=1.15 retry_reasons=(blur glare too_dark too_far blocked partial)
 tracking: track_max_side=1024 track_features=2000 track_min_inliers=25 track_span=2 track_iou=0.3 item_contain_weight=0.6
-map:      map_candidates=4 map_cross=2 map_max_search=300 map_search_budget_s=2 map_same_view=0.85 map_match=0.35 map_absorb=0.3 copy_overlap=0.2
+map:      map_candidates=4 map_cross=2 map_max_search=300 map_search_budget_s=2 map_same_view=0.85 map_match=0.35 map_absorb=0.3 map_item_match=0.5
+          copy_overlap=0.2 copy_min_frames=2 copy_color_max=35 rotation_conflict_T=0.6 group_min_books=4 group_area_factor=6 group_max_aspect=2
 read:     read_tries=3 reread_gain=1.5
 guide:    guide_gap_s=6 guide_settle_s=2 guide_book_asks=2 guide_book_gap_s=12 guide_moved_on_s=4 guide_back_asks=2 guide_back_gap_s=20
           guide_slow_gap_s=15 guide_progress_every=10 guide_idle_s=15 guide_idle_gap_s=60 guide_tick_s=2   (legacy coach: asks_per_region=2 ask_gap_s=8 settle_s=2)
@@ -479,9 +491,10 @@ Overridable in `.env`: model names, `VOICE`, `VOICE_ENGINE`, `NOISE_FILTER`, `VA
 ## 15. Known weak points to watch in the failure log
 
 - Segmentation boxes that merge two thin books or split one thick book.
-- A wrong read on a blurry, far crop is copied to every later sighting of that book (read once). Seen on real sweeps: two different spines both read as one title; a dark spine read as a title that belongs to its neighbour.
-- The shelf map assumes a flat shelf front; a frame that lines up with nothing starts a new map, and books on the far side of a gap are counted again until a later frame joins the maps.
-- Items (chairs, cabinets...) are still described once per sighting in every analysed frame: they are the largest remaining model cost.
+- A wrong read is still copied to later sightings of the same book (read once) when the look check passes (similar colours). The two causes seen on real sweeps (contradicting orientations, group boxes) and the drift cause are guarded (section 7.1b); a wrong read that is consistent across orientations is not detectable without a second source.
+- The shelf map assumes a flat shelf front. A frame that lines up with nothing starts a new map. On two real sweeps 14 of 54 and 10 of 46 frames did, and a looser second registration try rescued none of them (so it was removed): they are views that really share nothing with any earlier frame (the camera swung to the door or floor). Books seen on two separate maps are merged only when identified (same work); an unidentified book seen on two maps is counted twice. A model fallback ("do these two photos overlap?") was not built: for such frames the honest answer is no.
+- Item counts vary between runs (29-44 on one sweep over the session as the grouping changed; 34 now) and have no hand count: items are boxed loosely and the open-vocabulary detector finds different things per frame.
+- Book counts have been compared with the shelf only by eye; `python -m backend.eval sweeps/<id> --count N` checks a sweep against a hand count (5% bar).
 - Marker not coplanar with spine fronts (deep shelves): systematic dims bias.
 - Reconstruction on plain white walls; fast panning.
 - Catalogue misses for regional or older titles (leads to honest `unidentified`).
