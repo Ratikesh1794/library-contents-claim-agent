@@ -120,3 +120,24 @@ def test_items_must_be_a_category_the_claim_asks_for_and_seen_in_two_frames():
     links = {("f_0000", "f_0001"): shift(0)}
     objs = [o for o in build_objects(ok + once + other + undescribed, [fr(0), fr(1)], links) if o.kind == "item"]
     assert [(o.id, o.category) for o in objs] == [("i_001", "lamp")]                    # and the id is renumbered, no gaps
+
+
+def test_an_item_left_and_returned_to_counts_once_but_two_side_by_side_count_twice():
+    one = dataclasses.replace(CFG, item_min_sightings=1)
+    named = lambda s, n: s.model_copy(update={"item": s.item.model_copy(update={"name": n})})
+    # the desk at frames 0 and 3, no tracking link between the visits (the camera swung away)
+    desk = [named(item(0, 100, "furniture"), "wooden desk"), named(item(3, 400, "furniture"), "wooden desk")]
+    assert len(build_objects(desk, [fr(0), fr(3)], None, one)) == 1
+    # two chairs in one frame, clearly apart: two items
+    chairs = [named(item(0, 100, "furniture"), "office chair"), named(item(0, 600, "furniture"), "office chair")]
+    assert len(build_objects(chairs, [fr(0)], None, one)) == 2
+
+
+def test_one_stray_label_does_not_merge_two_different_items():
+    one = dataclasses.replace(CFG, item_min_sightings=1)
+    named = lambda s, n: s.model_copy(update={"item": s.item.model_copy(update={"name": n})})
+    big = [named(item(0, 100, "electronics"), "floor speaker"), named(item(1, 100, "electronics"), "floor speaker"),
+           named(item(2, 100, "electronics"), "wireless speaker")]                  # one mislabelled sighting
+    small = [named(item(5, 400, "electronics"), "wireless speaker")]
+    objs = build_objects(big + small, [fr(i) for i in (0, 1, 2, 5)], None, one, book_groups=[[s.id for s in big]])
+    assert len(objs) == 2

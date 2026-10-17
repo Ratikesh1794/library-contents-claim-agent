@@ -15,7 +15,7 @@ Goal: one Object per physical book/item, WITHOUT ever dropping an unidentified b
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from statistics import median
 from typing import Literal
@@ -200,15 +200,22 @@ def build_objects(sightings: list[Sighting], frames: list[Frame],
 
     def apart(a: str, b: str) -> bool:
         """Two copies of one title: clearly separate boxes side by side in at least `copy_min_frames` frames. A single
-        frame can be a ghost (motion blur doubles a spine, shifted by about its own width)."""
+        frame can be a ghost (motion blur doubles a spine, shifted by about its own width). Items: one frame is enough
+        (two chairs side by side are not a blur ghost)."""
         frames_apart = {sa.frame_id for sa in members[a] for sb in members[b]
                         if sa.frame_id == sb.frame_id and _overlap(sa.bbox, sb.bbox) < cfg.copy_overlap}
-        return len(frames_apart) >= cfg.copy_min_frames
+        return len(frames_apart) >= (cfg.copy_min_frames if by_id[members[a][0].id].kind == "book" else 1)
     by_key: dict[str, list[str]] = defaultdict(list)
     for root, ids in groups.items():
         keys = g.keys.get(root) or set()
         if len(keys) == 1 and by_id[ids[0]].kind == "book":
             by_key[next(iter(keys))].append(root)
+        # An item the camera left and came back to is not linked by tracking (no overlapping frames between the two
+        # visits). Same name ("wooden desk") and never seen as two boxes in one frame -> one item.
+        # ponytail: two identical items never filmed together are counted once; the map's room position would split them.
+        names = Counter(s.item.name.lower() for s in members[root] if s.item and s.item.name)
+        if names and by_id[ids[0]].kind == "item":         # the group's majority name: one stray label must not bridge
+            by_key["name:" + names.most_common(1)[0][0]].append(root)
     for roots in by_key.values():
         copies: list[list[str]] = []                           # each entry: the groups that are one physical copy
         for r in sorted(roots, key=lambda root: min(fr[f].t for f in frames_of[root])):
