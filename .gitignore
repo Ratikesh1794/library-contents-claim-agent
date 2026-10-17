@@ -10,3 +10,4 @@ __pycache__/
 certs/
 docs/*.pdf
 models/
+submission/
