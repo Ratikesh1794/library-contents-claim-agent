@@ -28,7 +28,7 @@ import numpy as np
 
 from backend import deps
 from backend.core import facts, store
-from backend.stages.catalogue import norm, token_set_ratio
+from backend.stages.catalogue import author_surname, norm, token_set_ratio
 from backend.config import CFG, Config
 from backend.ports import FX, Listing, PriceSource
 from backend.schemas import Object, Price, PriceResult, UserFact
@@ -42,15 +42,20 @@ def _blocked(title: str, own: str, cfg: Config) -> bool:
 
 
 def _accept_book(o: Object, l: Listing, cfg: Config) -> bool:
-    """ISBN in the listing title, or: after removing author + format words, what is left must match the
-    title closely (so 'Dune' does NOT accept 'Dune Messiah')."""
+    """ISBN in the listing title, or: after removing author + format words, what is left must match the title closely
+    (so 'Dune' does NOT accept 'Dune Messiah'). A listing may also carry a subtitle ('The Power of Now: A Guide to...',
+    'The Secret by Rhonda Byrne'): the part before it is compared too. A source with no author field
+    (`verify_author`) must show the author's surname in the listing title: 'The Secret' is the title of many books."""
     if _blocked(l.title, o.title or "", cfg):
         return False
     if o.isbn and o.isbn.replace("-", "") in l.title.replace("-", ""):
         return True
+    if l.verify_author and (not o.author or author_surname(o.author) not in norm(l.title).split()):
+        return False
     drop = set(norm(o.author).split()) | set(cfg.listing_noise) - set(norm(o.title).split())
-    rest = " ".join(w for w in norm(l.title).split() if w not in drop and not re.fullmatch(r"\d+(st|nd|rd|th)", w))
-    return SequenceMatcher(None, norm(o.title), rest).ratio() >= cfg.list_T
+    rest = lambda t: " ".join(w for w in norm(t).split() if w not in drop and not re.fullmatch(r"\d+(st|nd|rd|th)", w))
+    main = re.split(r"\s*[:|(\[]\s*|\s+-\s+|\s+by\s+", l.title, maxsplit=1)[0]
+    return max(SequenceMatcher(None, norm(o.title), rest(t)).ratio() for t in (l.title, main)) >= cfg.list_T
 
 
 def _convert(l: Listing, currency: str, fx: FX) -> tuple[float, bool, float | None, str | None]:

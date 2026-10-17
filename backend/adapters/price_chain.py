@@ -13,13 +13,19 @@ class ChainPriceSource:
         self.sources = sources
 
     def local_market(self, country: str | None) -> str | None:
+        self._country = country
         for i, s in enumerate(self.sources):
             if (m := s.local_market(country)):
                 return f"{i}|{m}"
         return None
 
     def fallback_markets(self) -> list[str]:
-        return [f"{i}|{m}" for i, s in enumerate(self.sources) for m in s.fallback_markets()]
+        """The price stage tries the local market, then these: every OTHER source's local market first (so a country's own
+        prices are preferred to converted foreign ones), then each source's foreign fallback."""
+        country = getattr(self, "_country", None)
+        local = [f"{i}|{m}" for i, s in enumerate(self.sources) if (m := s.local_market(country))]
+        foreign = [f"{i}|{m}" for i, s in enumerate(self.sources) for m in s.fallback_markets()]
+        return local + foreign
 
     def search(self, query: str, market: str, condition: str, books: bool = True, hint: dict | None = None) -> list[Listing]:
         i, m = market.split("|", 1)

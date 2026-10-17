@@ -54,6 +54,7 @@ class Listing:
     source: str
     condition: str                 # "new" | "used"
     isbn: str | None = None
+    verify_author: bool = False    # the source has no author field: the price stage must find the author in the title
 
 
 class PriceSource(Protocol):
