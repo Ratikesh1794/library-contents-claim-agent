@@ -113,3 +113,21 @@ def test_a_marketplace_price_is_still_the_lowest_accepted_new_listing():
             return [Listing("Dune Frank Herbert", p, "USD", f"http://e/{p}", "2026-10-17T00:00:00Z", f"ebay:{m}", cond) for p in (14.0, 9.0, 11.0)]
     r = price_stage.price_book(book(8, "Dune", "Frank Herbert"), [], "USD", "US", Market(), FakeFX(), CFG)
     assert r.replacement.amount == 9.0
+
+
+def test_the_same_books_can_be_priced_for_a_second_country(tmp_path, monkeypatch):
+    import sys
+    sys.path.insert(0, "scripts")
+    from price_second_country import compare
+    from backend.core import store
+    sd = tmp_path / "s"
+    sd.mkdir()
+    store.write(sd, "meta.json", {"country": "US", "currency": "USD"})
+    store.write(sd, "objects.json", [book(1, "Rich Dad, Poor Dad", "Robert Kiyosaki")])
+    def fake(ns, url, params, key_extra=None):
+        gbp_ = params["country"] == "GB"
+        return {"items": [vol("Rich Dad Poor Dad", ["Robert Kiyosaki"], 8.99 if gbp_ else 7.0, cur="GBP" if gbp_ else "USD")]}, "2026-10-17T10:00:00Z"
+    monkeypatch.setattr(gbp, "get_json", fake)
+    rows = compare(sd, "GB", "GBP", source=ChainPriceSource([GoogleBooksPrices()]), fx=FakeFX({("USD", "GBP"): 0.8}))
+    assert rows[0]["home"]["amount"] == 7.0 and rows[0]["home"]["currency"] == "USD"
+    assert rows[0]["second"]["amount"] == 8.99 and rows[0]["second"]["currency"] == "GBP" and rows[0]["second"]["converted"] is False

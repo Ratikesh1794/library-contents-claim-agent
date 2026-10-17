@@ -384,9 +384,12 @@ Tests (on synthetic scenes): known-size box scene → area error < 5%; missing m
 
 | Purpose | Source | Notes |
 |---|---|---|
-| New price | Shopping search API (country param) and/or retailer API | Take lowest credible in-stock price from a known retailer allow-list. |
-| Used price | eBay Browse API (country marketplace), sold/active filtered by condition | Median of ≥3 comparable listings; fewer → `range` or blank. |
+| New price | **Google Books store price** (built, works without eBay): `volumes?country=<market>`, `saleInfo.retailPrice` of English volumes that are `FOR_SALE`, with its `buyLink` and the retrieval date. It is an **ebook** price (`source = google_books_ebook:<country>`), new only. Three query styles are combined (plain text, plain text + `filter=paid-ebooks`, title only + `filter=paid-ebooks`: each finds books the others miss) and every listing then passes the strict title check (translations, summaries, collections and other books by the author are rejected). With several accepted listings the **median** is used, not the cheapest, because an ebook store lists $0.49 knock-off editions next to the real one. eBay (when its keys are set) comes first in the chain and keeps the lowest-accepted-listing rule. A retailer/shopping API is still the better source. |
+| Used price | eBay Browse API (country marketplace), sold/active filtered by condition (**needs eBay keys; without them used value stays blank**) | Median of ≥3 comparable listings; fewer → `range` or blank. |
+| Items | eBay only (not built for another source) | Without eBay keys every item is `unpriced` and goes to the review queue. |
 | FX | Frankfurter (ECB) | Rate + date stored. |
+
+Source chain (`deps.price_source()` -> `adapters/price_chain.ChainPriceSource`): eBay when `EBAY_CLIENT_ID`/`EBAY_CLIENT_SECRET` are set, then `GoogleBooksPrices`. Market ids are namespaced with the source index ("1|GB") so eBay's "EBAY_GB" and Google's "GB" coexist. Sources that set `wants_hints` also get `{title, author}` from the price stage. `python scripts/price_second_country.py sweeps/<id> GB` prices the same identified books for a second country (the brief's "locale is a setting" demo) and writes `prices_GB.json`.
 
 ### 9.3 Algorithm per book
 
@@ -493,6 +496,8 @@ Overridable in `.env`: model names, `VOICE`, `VOICE_ENGINE`, `NOISE_FILTER`, `VA
 - Segmentation boxes that merge two thin books or split one thick book.
 - A wrong read is still copied to later sightings of the same book (read once) when the look check passes (similar colours). The two causes seen on real sweeps (contradicting orientations, group boxes) and the drift cause are guarded (section 7.1b); a wrong read that is consistent across orientations is not detectable without a second source.
 - The shelf map assumes a flat shelf front. A frame that lines up with nothing starts a new map. On two real sweeps 14 of 54 and 10 of 46 frames did, and a looser second registration try rescued none of them (so it was removed): they are views that really share nothing with any earlier frame (the camera swung to the door or floor). Books seen on two separate maps are merged only when identified (same work); an unidentified book seen on two maps is counted twice. A model fallback ("do these two photos overlap?") was not built: for such frames the honest answer is no.
+- Items: what counts as an item is now narrow (found by looking at a real session where 31 of 55 "items" were junk: blurred fragments, bulbs, floor patterns, and parts of a person): people are masked out by their outline (`person_conf`, `person_overlap`; the brief says not to capture people), only the categories in `item_keep` (the brief's list, never "other"), fragments under `item_min_frac` of the frame are not described, an item needs `item_min_sightings` (2), and the detector vocabulary lists only what the brief names. Result on that session: 55 -> 11-16 items. Saved frames and thumbnails can still show a person; avoid people in the demo capture.
+- Prices: only books Google Books sells as ebooks get a price (2 of 6 identified on one real session); used value and every item price need eBay keys. A median of several cheap ebook editions can be well below the print price: it is labelled as an ebook price, with the listing count.
 - Item counts vary between runs (29-44 on one sweep over the session as the grouping changed; 34 now) and have no hand count: items are boxed loosely and the open-vocabulary detector finds different things per frame.
 - Book counts have been compared with the shelf only by eye; `python -m backend.eval sweeps/<id> --count N` checks a sweep against a hand count (5% bar).
 - Marker not coplanar with spine fronts (deep shelves): systematic dims bias.

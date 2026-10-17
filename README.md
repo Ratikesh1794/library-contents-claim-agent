@@ -73,7 +73,7 @@ python -m backend.eval sweeps/<id> ground_truth/                 # pass-bar tabl
 | `VOICE_ENGINE` | no | `pipecat` (default: the laptop filters noise and decides turns; phone on the **same Wi-Fi**) or `direct` (phone straight to OpenAI; works on any network) |
 | `VAD_MIN_VOLUME`, `NOISE_FILTER` | no | Pipecat engine: loudness needed to count as speech (default 0.72; raise if a TV still triggers it) and `rnnoise`/`off` |
 | `NOISE_REDUCTION`, `VAD_THRESHOLD` | no | OpenAI-side noise reduction `far_field`/`near_field`/`off`; `VAD_THRESHOLD` is for the direct engine |
-| `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET` | for prices | Without them every price is blank (honest blank, listed in the review queue) |
+| `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET` | for used prices and item prices | Without them: used value and every item price stay blank (honest blank, listed in the review queue). New-book prices still come from Google Books store prices (ebook, labelled `google_books_ebook`) for the books Google sells; `GOOGLE_BOOKS_API_KEY` is used for that |
 | `GOOGLE_BOOKS_API_KEY` | no | Raises the catalogue quota |
 | `MARKER_SIDE_CM` | for dimensions | Side of the printed ArUco marker, measured with a ruler. Unset means book and room dimensions stay blank |
 | `SWEEP_TOKEN` | no | Fixed access token, so the phone link survives restarts |
@@ -165,7 +165,7 @@ against real OpenAI.
 - Non-books are rejected by a check in the spine-read call (verified on a small real sample); detector boxes can still be loose.
 - Background voices: the Pipecat engine's volume gate ignored a TV ~20 dB quieter than the user in testing; a loud TV near the phone can still pass (raise `VAD_MIN_VOLUME`, or use hold-to-talk). Soft first words can be clipped by the gate.
 - The Pipecat engine needs the phone on the same Wi-Fi as the laptop (or a TURN server in `ICE_SERVERS`); `VOICE_ENGINE=direct` works anywhere.
-- Without eBay keys every price is blank.
+- Without eBay keys: book prices exist only for books Google Books sells as ebooks (new, labelled ebook); used values and item prices are blank. `python scripts/price_second_country.py sweeps/<id> GB` shows the same books priced for a second country.
 - Item counts after tracking have not yet been checked on a sweep captured with the new camera path.
 
 **Not built yet:** room size on iPhone (WebXR room measuring is Android Chrome only), markerless spine scale, room
