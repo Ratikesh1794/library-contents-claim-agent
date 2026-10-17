@@ -50,6 +50,7 @@ class _Read(BaseModel):
 
 
 class _Item(BaseModel):
+    name: str | None = None
     category: str | None = None
     material: str | None = None
     brand_model: str | None = None
@@ -118,4 +119,4 @@ class OpenAIVision:
     def describe_item(self, crop: np.ndarray) -> ItemGuess:
         r, _ = self._ask("item", prompts.DESCRIBE_ITEM, crop, _Item, categories=", ".join(self.cfg.item_categories))
         cat = r.category if r.category in self.cfg.item_categories else "other" if r.category else None
-        return ItemGuess(category=cat, material=r.material, brand_model=r.brand_model, dims_hint=r.dims_hint)
+        return ItemGuess(name=r.name, category=cat, material=r.material, brand_model=r.brand_model, dims_hint=r.dims_hint)

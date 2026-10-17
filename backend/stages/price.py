@@ -41,6 +41,17 @@ def _blocked(title: str, own: str, cfg: Config) -> bool:
     return any(w in t and w not in o for w in cfg.listing_blocklist)
 
 
+STOP = {"the", "a", "an", "of", "and", "in", "on", "to", "for", "with", "my", "your", "is", "it"}
+
+
+def _distinctive(title: str | None) -> bool:
+    """Two or more significant words ('The Power of Now', 'Shoe Dog'). A shorter title ('The Secret', 'Dune', 'It') is
+    shared by many books, so a listing without an author field must name the author to count. (Merchant titles mostly
+    omit the author: requiring it always would reject nearly every listing.)"""
+    main = re.split(r"\s*[:;(]\s*", title or "", maxsplit=1)[0]
+    return len([w for w in norm(main).split() if w not in STOP]) >= 2
+
+
 def _accept_book(o: Object, l: Listing, cfg: Config) -> bool:
     """ISBN in the listing title, or: after removing author + format words, what is left must match the title closely
     (so 'Dune' does NOT accept 'Dune Messiah'). A listing may also carry a subtitle ('The Power of Now: A Guide to...',
@@ -50,7 +61,7 @@ def _accept_book(o: Object, l: Listing, cfg: Config) -> bool:
         return False
     if o.isbn and o.isbn.replace("-", "") in l.title.replace("-", ""):
         return True
-    if l.verify_author and (not o.author or author_surname(o.author) not in norm(l.title).split()):
+    if l.verify_author and not _distinctive(o.title) and (not o.author or author_surname(o.author) not in norm(l.title).split()):
         return False
     drop = set(norm(o.author).split()) | set(cfg.listing_noise) - set(norm(o.title).split())
     rest = lambda t: " ".join(w for w in norm(t).split() if w not in drop and not re.fullmatch(r"\d+(st|nd|rd|th)", w))
@@ -118,7 +129,11 @@ def price_book(o: Object, user_facts: list[UserFact], currency: str, country: st
             usd = _mk("used", used, currency, cfg.condition_assumed, amount=round(median(vals), 2), rep=rep)
         else:
             usd = _mk("used", used, currency, cfg.condition_assumed, low=vals[0], high=vals[-1], rep=rep)
-        if vals[-1] / max(vals[0], 0.01) > cfg.diverge_ratio:
+        # Rare/collectible copies show as prices that genuinely disagree. With many listings compare the typical spread
+        # (20th..80th percentile): among 20 used copies of a popular book one collector's listing always exists, and
+        # cheapest-vs-dearest flagged ordinary paperbacks for appraisal.
+        lo_q, hi_q = (float(np.percentile(vals, 20)), float(np.percentile(vals, 80))) if len(vals) >= 5 else (vals[0], vals[-1])
+        if hi_q / max(lo_q, 0.01) > cfg.diverge_ratio:
             return PriceResult(object_id=o.id, status="needs_appraisal", reason="used_prices_diverge")
     limit = cfg.appraisal_threshold_usd * (fx.rate("USD", currency)[0] if currency != "USD" else 1.0)
     if any(v is not None and v > limit for p in (repl, usd) if p for v in (p.amount, p.high)):
@@ -136,8 +151,12 @@ def price_item(o: Object, user_facts: list[UserFact], currency: str, country: st
         return PriceResult(object_id=o.id, status="needs_appraisal", reason="art_without_print_confirmation")
     if not o.category:
         return PriceResult(object_id=o.id, status="unpriced", reason="unidentified")
-    known = bool(o.brand_model)
-    query: str = o.brand_model or " ".join(x for x in (o.material, "art print decor" if o.category == "art" else o.category) if x)
+    # A model has a number in it ("Sony WH-1000XM4"). A brand alone ("M-Audio") is not a model: searching it prices
+    # whatever that brand sells, so it only narrows the item search ("M-Audio audio amplifier") and gives a range.
+    known = bool(o.brand_model) and any(ch.isdigit() for ch in o.brand_model)
+    # Search by what the item is ("office chair"), not by its category ("furniture" returns any furniture at all).
+    brand = o.brand_model if o.brand_model and not known else None
+    query: str = (o.brand_model if known else None) or " ".join(x for x in (brand, o.name) if x) or " ".join(x for x in (o.material, "art print decor" if o.category == "art" else o.category) if x)
     local = src.local_market(country)
     acc = (lambda l: token_set_ratio(o.brand_model, l.title) >= cfg.list_T and not _blocked(l.title, "", cfg)) if known \
         else (lambda l: not _blocked(l.title, "", cfg))
@@ -146,14 +165,17 @@ def price_item(o: Object, user_facts: list[UserFact], currency: str, country: st
         return PriceResult(object_id=o.id, status="unpriced", reason="no_price")
     amts = sorted(r[1] for r in rows)
     if known:                                   # single source => low == high (stated in `source`)
-        rep = min(rows, key=lambda r: r[1])
+        rep = min(rows, key=lambda r: abs(r[1] - median(amts)))     # the typical listing, not the cheapest odd one
         p = _mk("replacement", rows, currency, "new", low=amts[0], high=amts[0], rep=rep)
         return PriceResult(object_id=o.id, status="priced", replacement=p)
     if len(amts) < 3:
         return PriceResult(object_id=o.id, status="unpriced", reason="too_few_listings")
-    lo, hi = (round(float(np.percentile(amts, q)), 2) for q in (20, 80))
+    lo, hi = (round(float(np.percentile(amts, q)), 2) for q in cfg.item_range_pct)
     rep = min(rows, key=lambda r: abs(r[1] - median(amts)))
-    return PriceResult(object_id=o.id, status="range", replacement=_mk("replacement", rows, currency, "new", low=lo, high=hi, rep=rep))
+    # "floor speaker" matches a $600 speaker and a $22,000 one: the range is sourced but tells an adjuster little.
+    wide = "wide_range" if hi / max(lo, 0.01) > cfg.diverge_ratio else None
+    return PriceResult(object_id=o.id, status="range", reason=wide,
+                       replacement=_mk("replacement", rows, currency, "new", low=lo, high=hi, rep=rep))
 
 
 class _AnyCategory(PriceSource):

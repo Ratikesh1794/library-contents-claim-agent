@@ -385,11 +385,12 @@ Tests (on synthetic scenes): known-size box scene → area error < 5%; missing m
 | Purpose | Source | Notes |
 |---|---|---|
 | New price | **Google Books store price** (built, works without eBay): `volumes?country=<market>`, `saleInfo.retailPrice` of English volumes that are `FOR_SALE`, with its `buyLink` and the retrieval date. It is an **ebook** price (`source = google_books_ebook:<country>`), new only. Three query styles are combined (plain text, plain text + `filter=paid-ebooks`, title only + `filter=paid-ebooks`: each finds books the others miss) and every listing then passes the strict title check (translations, summaries, collections and other books by the author are rejected). With several accepted listings the **median** is used, not the cheapest, because an ebook store lists $0.49 knock-off editions next to the real one. eBay (when its keys are set) comes first in the chain and keeps the lowest-accepted-listing rule. A retailer/shopping API is still the better source. |
+| New + used price, books and items | **Google Shopping via SerpApi** (`adapters/serpapi_prices.SerpApiPrices`, needs `SERPAPI_API_KEY`; free plan 250 searches/month, responses cached in `cache/serpapi_shopping/`): `engine=google_shopping`, `gl=<country>`, `hl=en`; books query `"<title> <author> book"`. Each `shopping_results[]` row gives `extracted_price`, `product_link`, merchant (`source = google_shopping:<merchant>:<CC>`); `second_hand_condition` marks used. Shopping titles have no author field, so book listings set `verify_author` and the price stage checks the author surname in the title when the title is short (fewer than 2 significant words). | Sits between eBay and Google Books in the chain. |
 | Used price | eBay Browse API (country marketplace), sold/active filtered by condition (**needs eBay keys; without them used value stays blank**) | Median of ≥3 comparable listings; fewer → `range` or blank. |
-| Items | eBay only (not built for another source) | Without eBay keys every item is `unpriced` and goes to the review queue. |
+| Items | eBay, else SerpApi Google Shopping | Without either key every item is `unpriced` and goes to the review queue. |
 | FX | Frankfurter (ECB) | Rate + date stored. |
 
-Source chain (`deps.price_source()` -> `adapters/price_chain.ChainPriceSource`): eBay when `EBAY_CLIENT_ID`/`EBAY_CLIENT_SECRET` are set, then `GoogleBooksPrices`. Market ids are namespaced with the source index ("1|GB") so eBay's "EBAY_GB" and Google's "GB" coexist. Sources that set `wants_hints` also get `{title, author}` from the price stage. `python scripts/price_second_country.py sweeps/<id> GB` prices the same identified books for a second country (the brief's "locale is a setting" demo) and writes `prices_GB.json`.
+Source chain (`deps.price_source()` -> `adapters/price_chain.ChainPriceSource`): eBay when `EBAY_CLIENT_ID`/`EBAY_CLIENT_SECRET` are set, then `SerpApiPrices` when `SERPAPI_API_KEY` is set, then `GoogleBooksPrices`. Every source's local market is tried before any foreign one. Market ids are namespaced with the source index ("1|GB") so eBay's "EBAY_GB" and Google's "GB" coexist. Sources that set `wants_hints` also get `{title, author}` from the price stage. `python scripts/price_second_country.py sweeps/<id> GB` prices the same identified books for a second country (the brief's "locale is a setting" demo) and writes `prices_GB.json`.
 
 ### 9.3 Algorithm per book
 
@@ -399,12 +400,13 @@ Source chain (`deps.price_source()` -> `adapters/price_chain.ChainPriceSource`):
 4. **Used value** = median accepted used price; `condition_assumed="good"` (fixed, stated); keep one representative URL + count.
 5. **Local missing, foreign present:** convert with FX; `converted=true`, store `fx_rate`, `fx_date`.
 6. **Nothing found:** leave `None`; add to `excluded_from_totals`; review queue reason `no_price`.
-7. **Appraisal flags (before pricing):** signed/inscribed per user fact, publication year < `antiquarian_year` (default 1900), listing price > `appraisal_threshold`, or two used prices diverge > 5×. → `needs_appraisal`, no price recorded.
+7. **Appraisal flags (before pricing):** signed/inscribed per user fact, publication year < `antiquarian_year` (default 1900), listing price > `appraisal_threshold`, or used prices diverge > 5× (with ≥5 listings the 20th vs 80th percentile is compared, so one collector's copy among many ordinary ones does not trigger it). → `needs_appraisal`, no price recorded.
 
 ### 9.4 Items
 
-- Known brand/model: query by model string; `status=priced` with `low/high` = min/max across ≥2 sources, or single price as `low=high` marked in `source`.
-- Unknown model: query `category + material + size hint`; `status=range`; low/high = 20th/80th percentile of results; confidence low.
+- Query is the item's short shop name from the vision model (`name`, e.g. "office chair"; shown as `description`), not its category.
+- Known model (`brand_model` contains a digit): query the model string; `status=priced`, `low=high` = the listing closest to the median.
+- Brand only ("M-Audio") or nothing: query `brand + name`; `status=range`; low/high = 25th/75th percentile (`item_range_pct`) of ≥3 listings. If high/low > `diverge_ratio` the range is kept (it is sourced) but the line goes to the review queue as `wide_range`.
 - Art/portraits: always `needs_appraisal` unless `UserFact` says print; if print, price as decor range.
 
 ### 9.5 Reliability

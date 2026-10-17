@@ -35,7 +35,7 @@ scale: {{ p.room.scale_method }} (confidence {{ p.room.confidence }})</p>
 <h2>Other items</h2>
 <table><tr><th></th><th>ID</th><th>Category</th><th>Status</th><th>Price range ({{ p.currency }})</th></tr>
 {% for i in p.items %}<tr class="{{ i.status }}"><td>{% if thumbs.get(i.id) %}<img src="{{ thumbs[i.id] }}">{% endif %}</td><td>{{ i.id }}</td>
- <td>{{ i.category or "?" }} {{ i.material or "" }} {{ i.brand_model or "" }}</td><td><span class="tag">{{ i.status }}</span> <span class="muted">{{ i.reason or "" }}</span></td>
+ <td><b>{{ i.description or i.category or "?" }}</b> <span class="muted">{{ i.category or "" }} {{ i.material or "" }}</span> {{ i.brand_model or "" }}</td><td><span class="tag">{{ i.status }}</span> <span class="muted">{{ i.reason or "" }}</span></td>
  <td>{% if i.price %}{{ i.price.low }}–{{ i.price.high }} <a href="{{ i.price.url }}">{{ i.price.source }}</a> <span class="muted">{{ i.price.retrieved_at }}</span>{% else %}—{% endif %}</td></tr>{% endfor %}</table>
 <h2>Review queue ({{ p.review_queue|length }})</h2>
 <table><tr><th>Ref</th><th>Reason</th><th>Detail</th></tr>

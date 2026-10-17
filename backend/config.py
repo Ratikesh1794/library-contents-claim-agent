@@ -165,6 +165,7 @@ class Config:
     antiquarian_year: int = 1900
     used_min_listings: int = 3
     diverge_ratio: float = 5.0
+    item_range_pct: tuple[int, int] = (25, 75)   # an item without brand/model: the middle half of matching listings
     condition_assumed: str = "good"
     http_timeout_s: float = 8.0
     price_workers: int = 6

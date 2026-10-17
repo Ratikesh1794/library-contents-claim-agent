@@ -27,13 +27,13 @@ def catalogue() -> Catalogue:
 
 
 def price_source() -> PriceSource:
-    """In order: eBay (new + used + items) when its keys are set; Serper Google Shopping (merchant prices for books and
-    items, new + used where it can tell) when SERPER_API_KEY is set; Google Books ebook prices (new, books only)."""
+    """In order: eBay (new + used + items) when its keys are set; Google Shopping via SerpApi (merchant prices for books
+    and items, new + used) when SERPAPI_API_KEY is set; Google Books ebook prices (new, books only)."""
     from backend.adapters.ebay import Ebay
     from backend.adapters.google_books_prices import GoogleBooksPrices
     from backend.adapters.price_chain import ChainPriceSource
-    from backend.adapters.serper_prices import SerperPrices
-    return ChainPriceSource(([Ebay()] if Ebay.configured() else []) + ([SerperPrices()] if SerperPrices.configured() else [])
+    from backend.adapters.serpapi_prices import SerpApiPrices
+    return ChainPriceSource(([Ebay()] if Ebay.configured() else []) + ([SerpApiPrices()] if SerpApiPrices.configured() else [])
                             + [GoogleBooksPrices()])
 
 

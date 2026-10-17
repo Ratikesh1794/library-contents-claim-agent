@@ -74,6 +74,7 @@ python -m backend.eval sweeps/<id> ground_truth/                 # pass-bar tabl
 | `VAD_MIN_VOLUME`, `NOISE_FILTER` | no | Pipecat engine: loudness needed to count as speech (default 0.72; raise if a TV still triggers it) and `rnnoise`/`off` |
 | `NOISE_REDUCTION`, `VAD_THRESHOLD` | no | OpenAI-side noise reduction `far_field`/`near_field`/`off`; `VAD_THRESHOLD` is for the direct engine |
 | `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET` | for used prices and item prices | Without them: used value and every item price stay blank (honest blank, listed in the review queue). New-book prices still come from Google Books store prices (ebook, labelled `google_books_ebook`) for the books Google sells; `GOOGLE_BOOKS_API_KEY` is used for that |
+| `SERPAPI_API_KEY` | no (recommended) | Google Shopping prices through serpapi.com: new and used book prices and item prices from real merchants. Free plan: 250 searches/month; responses are cached so re-running a sweep costs nothing. Used when eBay keys are absent |
 | `GOOGLE_BOOKS_API_KEY` | no | Raises the catalogue quota |
 | `MARKER_SIDE_CM` | for dimensions | Side of the printed ArUco marker, measured with a ruler. Unset means book and room dimensions stay blank |
 | `SWEEP_TOKEN` | no | Fixed access token, so the phone link survives restarts |

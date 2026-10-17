@@ -44,6 +44,7 @@ class Candidate(BaseModel):
 
 
 class ItemGuess(BaseModel):
+    name: str | None = None          # what it is, in shop words: "office chair", "floor lamp" (search + description)
     category: str | None = None
     material: str | None = None
     brand_model: str | None = None   # only if text/logo visible in the crop
@@ -98,6 +99,7 @@ class Object(BaseModel):
     catalogue_match_score: float | None = None
     source_url: str | None = None
     category: str | None = None
+    name: str | None = None
     material: str | None = None
     brand_model: str | None = None
     dims_hint: str | None = None
@@ -212,6 +214,7 @@ class ItemLine(BaseModel):
     id: str
     status: Literal["priced", "range", "needs_appraisal", "unpriced"]
     category: str | None = None
+    description: str | None = None     # output contract field: what the item is ("office chair"), from the vision model
     material: str | None = None
     brand_model: str | None = None
     dims_hint: str | None = None

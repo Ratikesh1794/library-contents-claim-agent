@@ -138,7 +138,7 @@ def _make(oid: str, kind: Literal["book", "item"], group: list[Sighting], frames
     else:
         it = next((s.item for s in sorted(group, key=lambda s: -(s.crop_blur or 0)) if s.item and s.item.category), None)
         if it:
-            o.category, o.material, o.brand_model, o.dims_hint = it.category, it.material, it.brand_model, it.dims_hint
+            o.category, o.name, o.material, o.brand_model, o.dims_hint = it.category, it.name, it.material, it.brand_model, it.dims_hint
         o.status = "identified" if o.category else "unidentified"
         o.reason = None if o.category else (reasons[0] if reasons else "low_confidence")
     return o

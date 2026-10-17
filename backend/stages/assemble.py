@@ -17,7 +17,7 @@ from backend.schemas import (BookLine, BookDims, Geometry, ItemLine, Object, Pac
                              ReviewRef, Room, Totals, UserFact)
 
 REVIEW_PRIORITY = ["needs_appraisal", "unidentified", "no_price", "low_confidence",
-                   "converted", "no_scale", "scale_suspect"]
+                   "converted", "wide_range", "no_scale", "scale_suspect"]
 
 
 def _total(values: Iterable[float | None]) -> float:
@@ -104,7 +104,7 @@ def build(sd: Path, cfg: Config = CFG) -> Packet:
         else:
             status = pr.status if pr is not None else "unpriced"
             line = ItemLine(
-                id=o.id, status=status, category=o.category, material=o.material, brand_model=o.brand_model,
+                id=o.id, status=status, category=o.category, description=o.name, material=o.material, brand_model=o.brand_model,
                 dims_hint=o.dims_hint, id_confidence=o.id_confidence, frame_ref=o.frame_ref, bbox=o.bbox,
                 price=pr.replacement if pr is not None and status != "needs_appraisal" else None,
                 reason=pr.reason if pr is not None else "not_priced", user_notes=notes)
@@ -115,6 +115,8 @@ def build(sd: Path, cfg: Config = CFG) -> Packet:
                 reasons.add("no_price")
             elif line.price and line.price.converted:
                 reasons.add("converted")
+            if pr is not None and pr.reason == "wide_range":
+                reasons.add("wide_range")
             if o.status == "unidentified":
                 reasons.add("unidentified")
             detail = line.reason

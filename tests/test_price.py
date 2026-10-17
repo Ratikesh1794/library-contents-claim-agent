@@ -73,3 +73,19 @@ def test_run_writes_prices(tmp_path):
     store.write(sd, "objects.json", [book()])
     price.run(sd, FakeSource(new={"EBAY_US": NEW}), FakeFX(), CFG)
     assert store.read(sd, "prices.json", list[PriceResult])[0].replacement.amount == 12.5
+
+
+def test_a_brand_without_a_model_gives_a_range_and_wide_ranges_go_to_review():
+    amp = Object(id="i_002", kind="item", sighting_ids=["s"], status="identified", frame_ref="f", bbox=(0, 0, 1, 1),
+                 category="electronics", name="audio amplifier", brand_model="M-Audio")
+    src = FakeSource(new={"EBAY_US": [listing("M-Audio amplifier", p) for p in (35, 60, 80, 90)]})
+    r = price.price_item(amp, [], "USD", "US", src, FakeFX(), CFG)
+    assert r.status == "range" and r.reason is None                       # not "priced" at the $35 one
+    wide = FakeSource(new={"EBAY_US": [listing("floor speaker", p) for p in (100, 150, 3000, 9000, 20000)]})
+    assert price.price_item(amp, [], "USD", "US", wide, FakeFX(), CFG).reason == "wide_range"
+
+
+def test_one_collector_listing_does_not_send_a_common_book_to_appraisal():
+    used = [listing("Dune by Frank Herbert", p, "used") for p in (4.0, 5.0, 5.5, 6.0, 7.0, 60.0)]
+    r = go(book(), FakeSource(new={"EBAY_US": NEW}, used={"EBAY_US": used}))
+    assert r.status == "priced" and r.used.amount is not None
