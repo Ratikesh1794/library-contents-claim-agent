@@ -84,3 +84,61 @@ def test_tools_share_the_same_rules_and_build_a_schema(tmp_path):
 def test_engine_is_chosen_by_config(tmp_path):
     assert create_app("t", dataclasses.replace(CFG, voice_engine="direct", sweeps_dir=tmp_path)).state.voice is agent
     assert create_app("t", dataclasses.replace(CFG, voice_engine="pipecat", sweeps_dir=tmp_path)).state.voice is voice_pipecat
+
+
+# ---- app messages must be SPOKEN, not just accepted (Pipecat's Realtime service stores a context update silently)
+class FakeLLM:
+    def __init__(self, fail_create=False):
+        self.events, self.created, self.fail_create = [], 0, fail_create
+
+    async def send_client_event(self, evt): self.events.append(evt)
+
+    async def _create_response(self):
+        if self.fail_create:
+            raise RuntimeError("renamed in a newer Pipecat")
+        self.created += 1
+
+
+def test_an_app_message_becomes_a_user_message_and_asks_for_a_response():
+    import asyncio
+    from backend.live.voice_pipecat import say
+    llm = FakeLLM()
+    asyncio.run(say(llm, "[app-state] CAPTURE_ISSUE ask=\"Hold steady.\""))
+    item = llm.events[0].item
+    assert llm.events[0].type == "conversation.item.create" and item.role == "user"
+    assert item.content[0].text == "[app-state] CAPTURE_ISSUE ask=\"Hold steady.\"" and llm.created == 1
+
+
+def test_if_the_private_response_call_goes_away_a_plain_response_create_is_sent():
+    import asyncio
+    from backend.live.voice_pipecat import say
+    llm = FakeLLM(fail_create=True)
+    asyncio.run(say(llm, "x"))
+    assert [e.type for e in llm.events] == ["conversation.item.create", "response.create"]
+
+
+def test_the_pump_waits_until_nobody_is_talking_and_survives_a_failed_delivery():
+    import asyncio
+    from types import SimpleNamespace
+    from backend.live.voice_pipecat import _pump_inject
+
+    class Flaky(FakeLLM):
+        async def send_client_event(self, evt):
+            if not self.events and not getattr(self, "boom", False):
+                self.boom = True
+                raise ConnectionError("socket closed")
+            await super().send_client_event(evt)
+
+    async def go():
+        session, bridge, llm = SimpleNamespace(inject=asyncio.Queue()), SimpleNamespace(state="speaking"), Flaky()
+        task = asyncio.create_task(_pump_inject(session, llm, bridge))
+        session.inject.put_nowait("first (lost)")
+        session.inject.put_nowait("second")
+        await asyncio.sleep(0.5)
+        assert llm.events == []                                   # the agent is still speaking: nothing is sent over it
+        bridge.state = "listening"
+        await asyncio.sleep(0.6)
+        task.cancel()
+        return llm
+    llm = asyncio.run(go())
+    assert [e.item.content[0].text for e in llm.events if e.type == "conversation.item.create"] == ["[app-state] second"]

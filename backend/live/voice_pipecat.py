@@ -143,15 +143,30 @@ def _make_bridge(session):
     return UIBridge()
 
 
-async def _pump_inject(session, worker, bridge) -> None:
+async def say(llm, text: str) -> None:
+    """Make the agent react to an app message NOW: add it to the conversation as a user message and ask for a response.
+    Pipecat's Realtime service does neither for a context update (it only stores it), so a message sent the usual way
+    (LLMMessagesAppendFrame) was accepted and then never spoken: the guidance was silently lost."""
+    from pipecat.services.openai.realtime import events
+    item = events.ConversationItem(role="user", type="message", content=[events.ItemContent(type="input_text", text=text)])
+    await llm.send_client_event(events.ConversationItemCreateEvent(item=item))
+    try:
+        await llm._create_response()             # also tells the pipeline a response is starting (captions, state)
+    except Exception as e:                       # a Pipecat change: ask for the response the plain way
+        log.warning("say(): falling back to a bare response.create (%s)", e)
+        await llm.send_client_event(events.ResponseCreateEvent())
+
+
+async def _pump_inject(session, llm, bridge) -> None:
     """Coach / app-state messages, marked [app-state], sent only while nobody is talking."""
-    from pipecat.frames.frames import LLMMessagesAppendFrame
     while True:
         text = await session.inject.get()
         while bridge.state in ("hearing", "thinking", "speaking"):
             await asyncio.sleep(0.2)
-        await worker.queue_frames([LLMMessagesAppendFrame(
-            messages=[{"role": "user", "content": f"[app-state] {text}"}], run_llm=True)])
+        try:
+            await say(llm, f"[app-state] {text}")
+        except Exception as e:                   # one lost message must not stop the ones after it
+            log.warning("could not deliver app message to the agent: %s", e)
 
 
 async def run(session, call_id: str, cfg=CFG) -> None:
@@ -207,7 +222,7 @@ async def run(session, call_id: str, cfg=CFG) -> None:
     async def _disconnected(_transport, _client):
         await runner.cancel()
 
-    inject = asyncio.create_task(_pump_inject(session, worker, bridge))
+    inject = asyncio.create_task(_pump_inject(session, llm, bridge))
     try:
         await runner.run()
     except asyncio.CancelledError:
