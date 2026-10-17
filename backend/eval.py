@@ -8,6 +8,7 @@ ground_truth/ files (all optional; only the metrics you provide are scored):
 Books are matched to truth by fuzzy title (shelf/position ids are not stable across frames).
 
     python -m backend.eval sweeps/<id> ground_truth/
+    python -m backend.eval sweeps/<id> --count 42      # quick check of just the book count, from objects.json (no packet needed)
 """
 from __future__ import annotations
 
@@ -89,7 +90,28 @@ def evaluate(sd: Path, gt: Path) -> list[dict]:
     return rows
 
 
+def quick_count(sd: Path, true_n: int) -> dict:
+    """Book count vs a hand count, straight from objects.json (so it works before pricing/the packet): found, identified,
+    unidentified (with reasons), error against the 5% bar, and the identified titles to eyeball against the shelf."""
+    objs = [o for o in store.read(Path(sd), "objects.json", list[dict], default=[]) if o.get("kind") == "book"]
+    ident = [o for o in objs if o.get("status") == "identified"]
+    reasons: dict[str, int] = {}
+    for o in objs:
+        if o.get("status") != "identified":
+            reasons[o.get("reason") or "unknown"] = reasons.get(o.get("reason") or "unknown", 0) + 1
+    err = _rel(len(objs), true_n)
+    return {"books_found": len(objs), "true_count": true_n, "error": round(err, 4) if err is not None else None,
+            "within_5_percent": err is not None and err <= 0.05, "identified": len(ident), "unidentified": reasons,
+            "titles": sorted(o["title"] for o in ident)}
+
+
 if __name__ == "__main__":
+    if len(sys.argv) >= 4 and sys.argv[2] == "--count":
+        r = quick_count(Path(sys.argv[1]), int(sys.argv[3]))
+        print(f"books found {r['books_found']} vs hand count {r['true_count']}: error {r['error']:.1%} "
+              f"({'within' if r['within_5_percent'] else 'OUTSIDE'} the 5% bar) | identified {r['identified']} | not identified {r['unidentified']}")
+        print("identified titles:", "; ".join(r["titles"]))
+        sys.exit(0)
     out = evaluate(Path(sys.argv[1]), Path(sys.argv[2] if len(sys.argv) > 2 else "ground_truth"))
     for r in out:
         print(f"{r['metric']:<38} {str(r['value']):>10}  bar {r['bar']:<8} n={r['n']}  {'PASS' if r['pass'] else 'FAIL' if r['pass'] is False else 'n/a'}")
