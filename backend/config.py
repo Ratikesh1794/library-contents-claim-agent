@@ -32,9 +32,7 @@ class Config:
     live_model: str = os.environ.get("LIVE_MODEL", "gpt-realtime-mini")   # OpenAI Realtime model
     transcribe_model: str = os.environ.get("TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
     voice: str = os.environ.get("VOICE", "alloy")
-    # Voice engine: "pipecat" (default; laptop filters the audio and decides turns, backend/live/voice_pipecat.py;
-    # needs the phone on the same Wi-Fi) or "direct" (phone straight to OpenAI over WebRTC, backend/live/agent.py).
-    voice_engine: str = os.environ.get("VOICE_ENGINE", "pipecat")
+    # Voice (backend/live/voice_pipecat.py): the laptop filters the audio and decides turns; phone on the same Wi-Fi.
     noise_filter: str = os.environ.get("NOISE_FILTER", "rnnoise")          # pipecat engine: rnnoise | off
     # pipecat engine: loudness (Pipecat's 0..1 scale, compressed) needed to count as speech. Measured: user near the phone
     # 0.84-0.91 (0.78 at half volume); a TV ~22 dB quieter 0.64-0.67. 0.72 sits between; raise if a TV still triggers it.
@@ -43,11 +41,8 @@ class Config:
     vad_start_secs: float = 0.3          # speech must last this long before it counts (coughs, bangs don't interrupt)
     vad_stop_secs: float = 0.5           # silence that ends the user's turn
     ice_servers: tuple[str, ...] = tuple(s.strip() for s in os.environ.get("ICE_SERVERS", "stun:stun.l.google.com:19302").split(",") if s.strip())
-    # Voice input in noisy rooms (see agent.session_config). far_field = phone held away from the mouth.
+    # OpenAI-side noise reduction on the voice input. far_field = phone held away from the mouth.
     noise_reduction: str = os.environ.get("NOISE_REDUCTION", "far_field")   # far_field | near_field | off
-    vad_threshold: float = float(os.environ.get("VAD_THRESHOLD", "0.7"))    # 0..1; higher = ignores more background noise
-    vad_silence_ms: int = 700           # pause that ends the user's turn
-    vad_prefix_ms: int = 300            # audio kept from just before speech was detected
     usd_per_mtok: float = 0.6  # rough blended estimate for gpt-4.1-mini, cost logging only (check current pricing)
 
     # --- quality gating (see quality.py; values from real sweeps, tune on your own footage)
@@ -57,11 +52,10 @@ class Config:
     dark_min: float = 60.0       # 99th-percentile brightness; below this even the lettering is too dark
     min_text_px: int = 12      # text height proxy = 0.6 * spine thickness in px
 
-    # --- detect (backend/adapters/local_detect.py). "local" = open-source models on this laptop, no prompt, no cost;
-    # "openai" = the DETECT prompt. Weights live in models/ (downloaded on first use, not in git).
+    # --- detect (backend/adapters/local_detect.py): open-source models on this laptop, no prompt, no cost.
+    # Weights live in models/ (downloaded on first use, not in git).
     # Compared on real sweep frames: COCO YOLO11 splits stacked/packed books best (e.g. 25 vs 16 books on one shelf);
     # open-vocabulary YOLOE finds room items COCO doesn't know (cabinet, rug, picture frame) or mislabels (cat, suitcase).
-    detector: str = os.environ.get("DETECTOR", "local")                    # local | openai
     models_dir: Path = Path(os.environ.get("MODELS_DIR") or ROOT / "models")
     book_model: str = "yolo11m-seg.pt"      # COCO; only class 73 "book" is used
     item_model: str = "yoloe-11l-seg.pt"    # open vocabulary: finds whatever item_vocab names
@@ -111,7 +105,6 @@ class Config:
     target_text_px: int = 32
     max_upscale: float = 3.0
     crop_margin: float = 0.08
-    identify_workers: int = 6
     crop_workers: int = 6        # spine reads run in parallel within one frame
     reuse_iou: float = 0.5       # a box that tracks onto an already-identified box reuses that read (no new API call)
     # Read once per book (BookTracker): an identified book is never read again; one that failed to read is retried only
@@ -124,11 +117,6 @@ class Config:
     novelty_max_zoom: float = 1.15        # ...and things look at most this much bigger (moving closer = re-read)
     retry_reasons: tuple[str, ...] = ("blur", "glare", "too_dark", "too_far", "blocked", "partial")
 
-    # --- coach
-    asks_per_region: int = 2
-    ask_gap_s: float = 8.0
-    settle_s: float = 2.0
-    resolve_ratio: float = 0.8
     # --- guide (backend/live/guide.py): proactive spoken guidance
     guide_gap_s: float = 6.0             # minimum time between any two spoken guidance messages
     guide_slow_gap_s: float = 15.0       # "slow down" at most this often
@@ -194,8 +182,6 @@ class Config:
 
     # --- serving
     keyframe_max_bytes: int = 3_000_000
-    audio_chunk_max_bytes: int = 128_000
-    ws_message_max_bytes: int = 4_000_000
     public_origin: str = os.environ.get("PUBLIC_ORIGIN", "")
     allowed_origins: tuple[str, ...] = ()
 

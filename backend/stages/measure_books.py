@@ -18,7 +18,7 @@ from statistics import median
 from backend.core import store
 from backend.config import CFG, Config
 from backend.stages.measure_scale import nearest_marker
-from backend.schemas import BookDims, Frame, Geometry, Object, Sighting
+from backend.schemas import BookDims, Geometry, Object, Sighting
 
 
 def _dims(s: Sighting, ppc: float) -> tuple[float, float]:

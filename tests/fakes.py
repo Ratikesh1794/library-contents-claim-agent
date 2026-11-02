@@ -4,7 +4,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from backend.ports import Detection, Listing, SpineRead
+from backend.ports import Listing, SpineRead
 from backend.schemas import Candidate, Frame, ItemGuess
 
 

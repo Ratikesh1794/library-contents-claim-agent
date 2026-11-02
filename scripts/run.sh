@@ -36,7 +36,7 @@ elif command -v ngrok >/dev/null; then
   ngrok http 8000 --log=stdout >"$LOG" 2>&1 &
   for _ in $(seq 1 30); do URL=$(curl -s localhost:4040/api/tunnels | $PY -c 'import sys,json;print(json.load(sys.stdin)["tunnels"][0]["public_url"])' 2>/dev/null || true); [ -n "${URL:-}" ] && break; sleep 1; done
 else
-  echo "Install cloudflared or ngrok (or use scripts/mkcert_setup.sh). Serving on http://localhost:8000 only."; URL="http://localhost:8000"
+  echo "Install cloudflared or ngrok. Serving on http://localhost:8000 only."; URL="http://localhost:8000"
 fi
 export PUBLIC_ORIGIN="${URL:-}"
 # Everything happens on the laptop dashboard, including the phone's QR code; it opens once the server is up.

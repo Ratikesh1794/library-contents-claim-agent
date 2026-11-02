@@ -1,4 +1,4 @@
-"""Voice agent prompt (backend/live/agent.py), sent once when the call is created."""
+"""Voice agent prompt (backend/live/agent.py instructions()), sent once when the call is created."""
 
 # The agent's rules.  Placeholders: country, currency (from the sweep's meta.json)
 SYSTEM = """You are a capture coach and conversation partner for a home-contents insurance sweep.

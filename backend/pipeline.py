@@ -26,7 +26,7 @@ ORDER = ["identify", "dedupe", "measure", "room", "price", "assemble"]
 
 
 def run(sd: Path, only: str | None = None, start: str | None = None, cfg: Config = CFG, deps_: dict | None = None):
-    """deps_ can inject vision/catalogue/source/fx/reconstructor (tests, alternative providers)."""
+    """deps_ can inject vision/catalogue/source/fx (tests, alternative providers)."""
     sd, d = Path(sd), deps_ or {}
     t_all = time.time()
     metrics: dict = {"stages": {}}
@@ -48,7 +48,7 @@ def run(sd: Path, only: str | None = None, start: str | None = None, cfg: Config
     if want("measure"):
         parallel.append(("measure", lambda: (measure_scale.run(sd, cfg), measure_books.run(sd, cfg))))
     if want("room"):
-        parallel.append(("room", lambda: measure_room.run(sd, d.get("reconstructor"), cfg)))
+        parallel.append(("room", lambda: measure_room.run(sd, cfg)))
     if want("price"):
         parallel.append(("price", lambda: price.run(sd, d.get("source"), d.get("fx"), cfg, time.time() + cfg.budget_price_s)))
     with ThreadPoolExecutor(3) as ex:

@@ -25,19 +25,6 @@ def vision(tmp_path, parsed, model="gpt-4.1"):
     return ov.OpenAIVision(cfg, c), c
 
 
-def test_detect_scales_boxes_back_and_clips(tmp_path):
-    dets = ov._Dets(detections=[ov._Det(box=[100, 100, 200, 400], kind="book", layout="upright"),
-                                ov._Det(box=[10, 10, 5, 5], kind="item"),                 # reversed corners: sorted
-                                ov._Det(box=[1, 2, 3], kind="book")])                     # malformed: dropped
-    v, c = vision(tmp_path, dets)
-    img = np.zeros((2000, 3136, 3), np.uint8)          # larger than MAX_SIDE => downscaled by 0.5, boxes x2
-    out = v.detect(img)
-    assert out[0].bbox == (200, 200, 400, 800) and out[0].layout == "upright"
-    assert out[1].bbox == (10, 10, 20, 20) or len(out) == 2
-    assert len(out) == 2
-    assert "1568x1000 pixels" in c.calls[0]["messages"][0]["content"][0]["text"]
-
-
 def test_read_spine_item_and_cache(tmp_path):
     v, c = vision(tmp_path, ov._Read(title="Dune", author="Frank Herbert", publisher=None, legible=True))
     crop = np.full((50, 20, 3), 7, np.uint8)

@@ -167,7 +167,6 @@ def test_an_item_box_that_shows_something_else_is_described_not_copied(tmp_path)
 
 
 def test_items_are_never_counted_as_books():
-    import cv2
     t = BookTracker()
     img = np.random.default_rng(1).integers(0, 255, (700, 600, 3), dtype=np.uint8)
     book = Sighting(id="b", frame_id="f0", kind="book", bbox=(100, 50, 160, 450))

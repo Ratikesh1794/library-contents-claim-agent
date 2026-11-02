@@ -8,9 +8,8 @@ from pipecat.observers.base_observer import FramePushed
 from pipecat.processors.frame_processor import FrameDirection
 
 from backend.config import CFG
-from backend.live import agent, voice_pipecat
+from backend.live import voice_pipecat
 from backend.live.app import SweepSession, create_app
-from backend.live.coach import Coach
 
 
 class Hooks:
@@ -21,7 +20,7 @@ class Hooks:
 
 
 def session(tmp_path):
-    s = SweepSession("sw_x", tmp_path, CFG, Coach(CFG)); s.hooks = Hooks()
+    s = SweepSession("sw_x", tmp_path, CFG); s.hooks = Hooks()
     return s
 
 
@@ -81,9 +80,8 @@ def test_tools_share_the_same_rules_and_build_a_schema(tmp_path):
     assert s.hooks.skips == [("row2", "skip")] and results[0] == {"ok": True} and results[1]["ok"] is False
 
 
-def test_engine_is_chosen_by_config(tmp_path):
-    assert create_app("t", dataclasses.replace(CFG, voice_engine="direct", sweeps_dir=tmp_path)).state.voice is agent
-    assert create_app("t", dataclasses.replace(CFG, voice_engine="pipecat", sweeps_dir=tmp_path)).state.voice is voice_pipecat
+def test_app_uses_pipecat_by_default(tmp_path):
+    assert create_app("t", dataclasses.replace(CFG, sweeps_dir=tmp_path)).state.voice is voice_pipecat
 
 
 # ---- app messages must be SPOKEN, not just accepted (Pipecat's Realtime service stores a context update silently)

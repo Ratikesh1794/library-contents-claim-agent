@@ -67,7 +67,7 @@ class Guide:
     """Per-sweep guidance state: setup step, per-topic timing, book count milestones. See the module docstring."""
     def __init__(self, cfg: Config = CFG):
         self.cfg = cfg
-        self.last_t = NEVER                                # when anything was last spoken (also by the Coach)
+        self.last_t = NEVER                                # when a guide message was last spoken
         self.last_by: dict[str, float] = {}                # topic -> when it was last said
         self.count: dict[str, int] = {}                    # topic -> times in a row (escalates the wording)
         self.best_count = 0                                # most books found so far
@@ -127,10 +127,6 @@ class Guide:
         self.setup_asks += 1
         self.setup_t = now
         return {"type": "GUIDE", "key": f"setup:{self.setup}", "ask": texts[min(self.setup_asks - 1, len(texts) - 1)]}
-
-    def note_spoken(self, now: float) -> None:
-        """Something else just spoke: keep the next guide message from landing on top of it."""
-        self.last_t = max(self.last_t, now)
 
     def _gate(self, now: float, key: str, gap: float, last_user_speech_t: float, window: float | None = None) -> int | None:
         """May `key` be said now? -> how many times in a row it was said before (0 = first), or None for 'not now'.

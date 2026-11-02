@@ -30,7 +30,6 @@ const video = $("cam");
 
 // ---------------------------------------------------------------- helpers
 const api = (path, opts = {}) => fetch(path, { ...opts, headers: { "X-Sweep-Token": TOKEN, ...(opts.headers || {}) } });
-const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
 // ---------------------------------------------------------------- ui
 function setPill(text, s = "idle") { $("pillText").textContent = text; $("pill").dataset.s = s; }
@@ -216,7 +215,7 @@ function scheduleKeyframes() {
 // The server only relays the SDP offer/answer (POST /api/sweeps/<id>/voice) and drives the agent "sideband".
 // Over WebRTC the browser applies full echo cancellation + noise suppression (like a video call), so the
 // agent no longer hears itself or the room the way it did with raw audio over our WebSocket.
-let pc = null, actx = null, greeted = false, voiceRetry = 0, talkMode = "open", holding = false;
+let pc = null, actx = null, voiceRetry = 0, talkMode = "open", holding = false;
 const agentAudio = $("agentAudio"), micBtn = $("mute");
 const micTrack = () => stream?.getAudioTracks()[0];
 const micOpen = () => (talkMode === "open" ? !muted : holding);
@@ -248,9 +247,7 @@ async function startVoice() {
   const me = (pc = new RTCPeerConnection());
   me.ontrack = (e) => { agentAudio.srcObject = e.streams[0]; ensureSoundOn(); };
   me.addTrack(micTrack(), stream);
-  const dc = me.createDataChannel("oai-events");     // direct engine: used to trigger the greeting (pipecat greets server-side)
-  let engine = "pipecat";
-  dc.onopen = () => { if (engine === "direct" && !greeted) { greeted = true; dc.send(JSON.stringify({ type: "response.create" })); } };
+  me.createDataChannel("oai-events");                // Pipecat's SmallWebRTC expects a data channel; it greets server-side
   me.onconnectionstatechange = () => {
     if (me !== pc) return;
     const st = me.connectionState;
@@ -261,9 +258,7 @@ async function startVoice() {
   await me.setLocalDescription(await me.createOffer());
   const r = await api(`/api/sweeps/${sweepId}/voice`, { method: "POST", body: me.localDescription.sdp, headers: { "Content-Type": "application/sdp" } });
   if (!r.ok) { const e = new Error((await r.json().catch(() => ({}))).detail || "server said " + r.status); e.fatal = r.status === 503; throw e; }
-  engine = r.headers.get("X-Voice-Engine") || "pipecat";
   await me.setRemoteDescription({ type: "answer", sdp: await r.text() });
-  if (engine === "direct" && dc.readyState === "open" && !greeted) { greeted = true; dc.send(JSON.stringify({ type: "response.create" })); }
 }
 function retryVoice(why) {
   if (voiceRetry >= 5) { setPill("Voice unavailable", "bad"); addSystemLine(why + ". Stopped retrying; capture still works."); return; }

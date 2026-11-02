@@ -1,4 +1,3 @@
-import numpy as np
 from backend.core import store
 from backend.stages import identify
 from backend.config import CFG
@@ -56,7 +55,6 @@ def test_item_and_run_writes_sightings(tmp_path):
 
 
 def test_book_already_identified_in_previous_frame_is_not_read_again(tmp_path):
-    from backend.schemas import Frame
     sd, frames = make_sweep(tmp_path, n_frames=2)
     import shutil; shutil.copy(sd / frames[0].path, sd / frames[1].path)          # identical view: identity homography
     v = FakeVision([UPRIGHT], reads=[SpineRead("Dune", "Frank Herbert", None, True)])

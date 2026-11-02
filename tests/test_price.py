@@ -1,9 +1,7 @@
-import dataclasses
-
 from backend.core import store
 from backend.stages import price
 from backend.config import CFG
-from backend.schemas import ItemGuess, Object, PriceResult, UserFact
+from backend.schemas import Object, PriceResult, UserFact
 from tests.fakes import FakeFX, FakeSource, listing, make_sweep
 
 

@@ -4,7 +4,6 @@ import pytest
 from pydantic import ValidationError
 
 from backend import pipeline
-from backend.core import store
 from backend.stages import assemble
 from backend.config import CFG
 from backend.ports import Detection, SpineRead
@@ -20,7 +19,7 @@ def full_run(tmp_path):
     cat = FakeCatalogue({"dune": [cand("Dune", "Frank Herbert", isbn="123")]})
     src = FakeSource(new={"EBAY_US": [listing("Dune Frank Herbert", 12.5)]}, used={"EBAY_US": [listing("Dune Frank Herbert", p, "used") for p in (4, 5, 6)]})
     one_at_a_time = dataclasses.replace(CFG, crop_workers=1, item_min_sightings=1)   # reads in order; one frame only
-    pk = pipeline.run(sd, cfg=one_at_a_time, deps_={"vision": v, "catalogue": cat, "source": src, "fx": FakeFX(), "reconstructor": None})
+    pk = pipeline.run(sd, cfg=one_at_a_time, deps_={"vision": v, "catalogue": cat, "source": src, "fx": FakeFX()})
     return sd, pk
 
 

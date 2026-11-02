@@ -1,6 +1,6 @@
 """Several price sources behind one PriceSource: each is tried in turn by the price stage (local market first, then the
 fallback markets). A market id is namespaced with the index of the source that owns it ("1|GB"), so sources with
-different market vocabularies (eBay's "EBAY_GB", Google's "GB") can sit side by side."""
+different market vocabularies (e.g. "EBAY_GB" vs "GB") can sit side by side."""
 from __future__ import annotations
 
 from backend.ports import Listing, PriceSource

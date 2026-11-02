@@ -26,12 +26,10 @@ def test_the_wording_resets_after_a_quiet_spell():
     assert later == first
 
 
-def test_never_over_the_user_or_right_after_something_else_was_spoken():
+def test_never_over_the_user():
     g = Guide(CFG)
     assert g.on_blurry(100.0, last_user_speech_t=99.0) is None     # the user spoke 1 s ago
-    g.note_spoken(100.0)                                           # the coach just said something
-    assert g.on_blurry(100.0 + CFG.guide_gap_s - 1) is None
-    assert g.on_blurry(100.0 + CFG.guide_gap_s + 1) is not None
+    assert g.on_blurry(100.0) is not None
 
 
 def test_screens_get_a_coach_event_whatever_the_message_type():
@@ -265,13 +263,6 @@ def test_not_done_while_a_book_in_view_still_needs_attention():
     s, b = book(1)
     g.on_frame(1000.0 + CFG.guide_idle_s - 1, W, H, [(s, b)])                     # an unreadable book is in view right now
     assert g.on_tick(1000.0 + CFG.guide_idle_s + 1, 4) is None                    # so the user is busy, not finished
-
-
-def test_not_done_straight_after_something_else_was_said():
-    g = Guide(CFG)
-    g.on_tick(1000.0, 4)
-    g.note_spoken(1000.0 + CFG.guide_idle_s - 1)                                  # e.g. "go back to the book on your left"
-    assert g.on_tick(1000.0 + CFG.guide_idle_s + 1, 4) is None
 
 
 def test_the_second_done_message_is_shorter_and_says_how_to_finish_and_they_are_spaced_out():

@@ -1,4 +1,4 @@
-"""Google Books store prices as a PriceSource: the only real, retrievable price source that needs no eBay account.
+"""Google Books store prices as a PriceSource: new-book ebook prices, needs no extra account.
 
 A Google Books volume that is FOR_SALE in a country carries `saleInfo.retailPrice` (amount + currency) and a `buyLink`.
 That is a real price with a URL and a retrieval date, so it satisfies "every price has a source". Its limits are stated

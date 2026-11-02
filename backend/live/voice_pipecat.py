@@ -1,5 +1,4 @@
-"""Voice agent, Pipecat engine (VOICE_ENGINE=pipecat, the default). Same interface as backend/live/agent.py
-(start_call / run / hangup), so backend/live/app.py can use either.
+"""Voice agent (Pipecat). Interface used by backend/live/app.py: start_call / run / hangup.
 
     phone mic ──WebRTC (same Wi-Fi)──► laptop: SmallWebRTC ──► RNNoise ──► Silero VAD (volume gate) ──► OpenAI Realtime
     phone speaker ◄──────────────────────────────────────────────────────────────────────────────────┘
@@ -54,7 +53,7 @@ async def hangup(call_id: str) -> None:
 
 def make_tools(hooks) -> list:
     """The agent's tools as plain functions: Pipecat builds the tool schema from each signature + docstring.
-    Execution is shared with the other engine (agent.execute_tool), including rejecting half-filled calls."""
+    Execution lives in agent.execute_tool, including rejecting half-filled calls."""
 
     async def record_user_fact(params, target_hint: str, fact: str):
         """Record something the user told you about an item (e.g. 'first edition', 'signed', 'print').

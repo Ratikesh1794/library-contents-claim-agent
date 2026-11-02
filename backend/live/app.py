@@ -5,9 +5,9 @@ Auth: every API call and the WebSocket need the sweep token (?t= or X-Sweep-Toke
 needs ?t= too. Origin of WS handshakes must be same-host or in allowed origins / PUBLIC_ORIGIN.
 
 Flow per sweep:  POST /api/sweeps -> phone uploads keyframes (POST .../frames) -> a worker runs
-identify_frame on each -> inventory + Coach messages go down the WebSocket -> finish -> pipeline.
-Voice: the phone POSTs its WebRTC offer to /api/sweeps/<id>/voice; we create the OpenAI call and attach
-to it sideband (backend/live/agent.py). Voice audio never passes through this server.
+identify_frame on each -> inventory + Guide messages go down the WebSocket -> finish -> pipeline.
+Voice: the phone POSTs its WebRTC offer to /api/sweeps/<id>/voice; the laptop answers it with a Pipecat peer that
+filters the audio and talks to OpenAI Realtime (backend/live/voice_pipecat.py).
 """
 from __future__ import annotations
 
@@ -35,10 +35,9 @@ from fastapi.staticfiles import StaticFiles
 from backend import deps, pipeline
 from backend.stages.book_tracker import BookTracker
 from backend.core import locale, store
-from backend.live import agent, voice_pipecat
+from backend.live import voice_pipecat
 from backend.stages import dedupe, identify, track
 from backend.stages.room_corners import room_from_corners
-from backend.live.coach import Coach
 from backend.live.guide import Guide, screen_event
 from backend.config import CFG, ROOT, Config
 from backend.schemas import Frame, Sighting, UserFact
@@ -58,7 +57,6 @@ class SweepSession:
     sweep_id: str
     sd: Path
     cfg: Config
-    coach: Coach
     t0: float = field(default_factory=time.time)
     down: asyncio.Queue = field(default_factory=asyncio.Queue)     # agent/app -> every connected screen (fan-out)
     subs: set = field(default_factory=set)                          # one queue per open WebSocket (phone, dashboards)
@@ -109,7 +107,6 @@ class Hooks:
 
     def on_skip(self, region, action):
         if action == "skip":
-            self.s.coach.close(region)
             if self.s.tracker and self.s.guide:
                 self.s.guide.skip(self.s.tracker, self.s.last_frame_id, region)
             self.on_fact(region, "skip", None)
@@ -129,10 +126,8 @@ class Hooks:
 
 def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalogue=None, pipeline_deps=None,
                banner: bool = False, voice=None) -> FastAPI:
-    """`voice` = module/object with start_call, run, hangup. Default from VOICE_ENGINE: backend.live.voice_pipecat
-    ("pipecat") or backend.live.agent ("direct"). Tests inject a fake."""
-    if voice is None:
-        voice = agent if cfg.voice_engine == "direct" else voice_pipecat
+    """`voice` = module/object with start_call, run, hangup (default backend.live.voice_pipecat). Tests inject a fake."""
+    voice = voice or voice_pipecat
     @asynccontextmanager
     async def lifespan(app):
         if banner:
@@ -173,7 +168,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
         """The live session of a sweep, created on first use with its frame worker, fan-out and guide timer."""
         s = app.state.sessions.get(sweep_id)
         if s is None:
-            s = SweepSession(sweep_id, get_dir(sweep_id), cfg, Coach(cfg))
+            s = SweepSession(sweep_id, get_dir(sweep_id), cfg)
             s.guide = Guide(cfg)
             s.hooks = Hooks(s, finish)
             s.tasks.append(asyncio.create_task(frame_worker(s)))
@@ -210,7 +205,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
                 await guide_say(s, m)
 
     async def frame_worker(s: SweepSession):
-        """Identify keyframes as they arrive; update the panel and let the Coach react."""
+        """Identify keyframes as they arrive; update the panel and let the Guide react."""
         d = app.state.deps
         vision, cat = d["vision"] or deps.vision(), d["catalogue"] or deps.catalogue()
         s.tracker = s.tracker or BookTracker(cfg)
@@ -450,8 +445,7 @@ def create_app(token: str | None = None, cfg: Config = CFG, vision=None, catalog
             raise HTTPException(502, f"Could not start the voice call: {e}")
         s.call_id = call_id
         s.voice_task = asyncio.create_task(voice.run(s, call_id, cfg))
-        engine = "direct" if voice is agent else "pipecat" if voice is voice_pipecat else "custom"
-        return Response(answer, media_type="application/sdp", headers={"X-Voice-Engine": engine})
+        return Response(answer, media_type="application/sdp")
 
     @app.post("/api/sweeps/{sweep_id}/finish", dependencies=[Depends(require_token)])
     async def finish_route(sweep_id: str):
